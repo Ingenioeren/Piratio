@@ -16,21 +16,23 @@ import java.util.Locale;
 import java.util.Random;
 
 public class GameView extends View {
-    private static final float WORLD_W = 5200f;
-    private static final float WORLD_H = 3600f;
-    private static final int BOT_COUNT = 18;
-    private static final int BASE_LOOT_COUNT = 120;
-    private static final int MAX_LEVEL = 5;
-    private static final int[] LEVEL_THRESHOLDS = {0, 0, 60, 160, 320, 560};
-    private static final String[] SHIP_TITLES = {"", "Sloop", "Brig", "Frigate", "Galleon", "Man-o'-War"};
+    private static final float WORLD_W = 9200f;
+    private static final float WORLD_H = 6500f;
+    private static final int BOT_COUNT = 100;
+    private static final int BASE_LOOT_COUNT = 360;
+    private static final int MAX_LEVEL = 10;
+    private static final int[] LEVEL_THRESHOLDS = {0, 0, 60, 160, 320, 560, 860, 1240, 1700, 2260, 2940};
+    private static final String[] BASE_TITLES = {"", "Sloop", "Brig", "Frigate", "Galleon", "Man-o'-War"};
+    private static final String[] RAIDER_TITLES = {"", "", "", "", "", "", "Corsair", "Sea Wraith", "Phantom", "Tempest", "Blackwind"};
+    private static final String[] GUNNER_TITLES = {"", "", "", "", "", "", "Gunship", "Bombard", "Dreadnought", "Leviathan", "Iron Fortress"};
+    private static final String[] HUNTER_TITLES = {"", "", "", "", "", "", "Privateer", "Marauder", "Reaper", "Executioner", "Kraken Hunter"};
     private static final String[] BOT_NAMES = {
             "Black Bart", "Red Anne", "Barnacle Ben", "Mad Morgan", "Saltbeard", "Iron Jack",
             "Cutlass Kate", "Deadeye Dan", "Old Flint", "Sea Rat", "Captain Crow", "Bonny",
             "Dread Drake", "Gunpowder Gus", "Navy Hawk", "Blue Roger", "Scurvy Sam", "Kraken Joe",
-            "Storm Mary", "Shark Finn", "One-Eye", "Gold Tooth", "Powder Pete", "Cannon Jane"
+            "Storm Mary", "Shark Finn", "One-Eye", "Gold Tooth", "Powder Pete", "Cannon Jane",
+            "Wave Walker", "Scarlet Sam", "Anchor Abe", "Rogue Rose", "Tide Turner", "Skull Jim"
     };
-    private static final String[] SKIN_NAMES = {"Classic", "Crimson", "Ghost", "Royal"};
-    private static final int[] SKIN_COSTS = {0, 250, 600, 900};
 
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path path = new Path();
@@ -47,15 +49,11 @@ public class GameView extends View {
     private float worldTime;
     private float deathMessageTimer;
     private float adOverlayTimer;
-    private float storeMessageTimer;
-    private String storeMessage = "";
-
-    private int coins;
-    private int purchasedSkins;
-    private int selectedSkin;
     private int deathCount;
     private int nextAdDeath = 2;
-    private boolean shopOpen;
+    private int coins;
+    private int selectedSkin;
+    private boolean buildTreeOpen;
 
     private int joystickPointer = -1;
     private int firePointer = -1;
@@ -70,10 +68,7 @@ public class GameView extends View {
         super(context);
         prefs = context.getSharedPreferences("piratio_profile", Context.MODE_PRIVATE);
         coins = prefs.getInt("coins", 0);
-        purchasedSkins = prefs.getInt("skins", 1);
-        selectedSkin = clampInt(prefs.getInt("selected_skin", 0), 0, SKIN_NAMES.length - 1);
-        if ((purchasedSkins & (1 << selectedSkin)) == 0) selectedSkin = 0;
-
+        selectedSkin = clampInt(prefs.getInt("selected_skin", 0), 0, 3);
         setBackgroundColor(Color.rgb(23, 126, 164));
         setFocusable(true);
         setKeepScreenOn(true);
@@ -83,29 +78,32 @@ public class GameView extends View {
     private void initialiseWorld() {
         generateEnvironment();
 
-        player = new Ship("YOU", true, null);
+        player = new Ship("YOU", true, Role.PIRATE);
         safeRandomPosition(player);
         player.angle = -0.25f;
+        player.desiredAngle = player.angle;
         configureForLevel(player, 1, true);
         ships.add(player);
 
         for (int i = 0; i < BOT_COUNT; i++) {
             Role role;
-            if (i % 7 == 0) role = Role.NAVY;
-            else if (i % 3 == 0) role = Role.MERCHANT;
+            if (i % 11 == 0) role = Role.NAVY;
+            else if (i % 4 == 0) role = Role.MERCHANT;
             else role = Role.PIRATE;
 
-            Ship bot = new Ship(BOT_NAMES[i % BOT_NAMES.length], false, role);
+            String suffix = i < BOT_NAMES.length ? "" : " " + (1 + i / BOT_NAMES.length);
+            Ship bot = new Ship(BOT_NAMES[i % BOT_NAMES.length] + suffix, false, role);
             safeRandomPosition(bot);
             bot.angle = random.nextFloat() * (float) (Math.PI * 2.0);
             bot.desiredAngle = bot.angle;
-            int startingLevel = 1 + (random.nextInt(100) < 22 ? 1 : 0);
-            if (role == Role.NAVY && random.nextBoolean()) startingLevel++;
-            startingLevel = Math.min(startingLevel, 3);
-            bot.xp = xpForLevel(startingLevel) + random.nextInt(35);
-            configureForLevel(bot, startingLevel, true);
-            bot.aiTimer = random.nextFloat();
             bot.preferredSide = random.nextBoolean() ? 1f : -1f;
+
+            int roll = random.nextInt(100);
+            int startingLevel = roll < 4 ? 6 : roll < 12 ? 4 : roll < 30 ? 3 : roll < 58 ? 2 : 1;
+            if (startingLevel >= 6) bot.branch = randomBranch();
+            bot.xp = LEVEL_THRESHOLDS[startingLevel] + random.nextInt(startingLevel >= 5 ? 100 : 45);
+            configureForLevel(bot, startingLevel, true);
+            bot.aiTimer = random.nextFloat() * 1.5f;
             ships.add(bot);
         }
 
@@ -117,36 +115,41 @@ public class GameView extends View {
         windZones.clear();
 
         float[][] clusters = {
-                {950f, 800f}, {2150f, 2450f}, {3650f, 900f}, {4450f, 2700f}
+                {900f, 900f}, {2100f, 1600f}, {3400f, 800f}, {4700f, 1900f}, {6100f, 950f},
+                {7800f, 1550f}, {1300f, 4300f}, {2800f, 5200f}, {4700f, 4300f}, {6500f, 5050f},
+                {8100f, 3900f}, {5550f, 3150f}
         };
         for (float[] c : clusters) {
-            int count = 4 + random.nextInt(3);
+            int count = 5 + random.nextInt(5);
             for (int i = 0; i < count; i++) {
                 float a = random.nextFloat() * (float) Math.PI * 2f;
-                float d = 80f + random.nextFloat() * 280f;
+                float d = 90f + random.nextFloat() * 360f;
                 Rock rock = new Rock();
                 rock.x = c[0] + (float) Math.cos(a) * d;
                 rock.y = c[1] + (float) Math.sin(a) * d;
-                rock.radius = 48f + random.nextFloat() * 65f;
+                rock.radius = 45f + random.nextFloat() * 78f;
                 rocks.add(rock);
             }
         }
 
-        addWind(1200f, 2750f, 360f, -0.45f, 1.42f);
-        addWind(2750f, 850f, 420f, 0.28f, 1.38f);
-        addWind(3920f, 2050f, 360f, 1.02f, 1.45f);
-        addWind(1900f, 1550f, 300f, 2.55f, 1.34f);
-        addWind(4700f, 700f, 280f, 2.85f, 1.40f);
+        addWind(1150f, 2800f, 430f, -0.35f, 1.42f);
+        addWind(2600f, 900f, 460f, 0.30f, 1.40f);
+        addWind(3950f, 2850f, 500f, 0.95f, 1.47f);
+        addWind(5200f, 1250f, 410f, 2.55f, 1.38f);
+        addWind(6850f, 2750f, 500f, 0.18f, 1.45f);
+        addWind(7900f, 5100f, 460f, -2.55f, 1.43f);
+        addWind(3500f, 5250f, 440f, -1.05f, 1.40f);
+        addWind(5700f, 4700f, 390f, 2.95f, 1.36f);
     }
 
     private void addWind(float x, float y, float radius, float angle, float strength) {
-        WindZone zone = new WindZone();
-        zone.x = x;
-        zone.y = y;
-        zone.radius = radius;
-        zone.angle = angle;
-        zone.strength = strength;
-        windZones.add(zone);
+        WindZone z = new WindZone();
+        z.x = x;
+        z.y = y;
+        z.radius = radius;
+        z.angle = angle;
+        z.strength = strength;
+        windZones.add(z);
     }
 
     @Override
@@ -156,7 +159,6 @@ public class GameView extends View {
         float dt = lastFrameNanos == 0L ? 1f / 60f : (now - lastFrameNanos) / 1_000_000_000f;
         lastFrameNanos = now;
         dt = Math.min(dt, 0.033f);
-
         update(dt);
         drawGame(canvas);
         postInvalidateOnAnimation();
@@ -165,13 +167,11 @@ public class GameView extends View {
     private void update(float dt) {
         worldTime += dt;
         if (deathMessageTimer > 0f) deathMessageTimer -= dt;
-        if (storeMessageTimer > 0f) storeMessageTimer -= dt;
-
         if (adOverlayTimer > 0f) {
             adOverlayTimer -= dt;
             return;
         }
-        if (shopOpen) return;
+        if (buildTreeOpen) return;
 
         for (Ship ship : ships) {
             if (!ship.alive) {
@@ -179,12 +179,9 @@ public class GameView extends View {
                 if (ship.respawnTimer <= 0f) respawnShip(ship);
                 continue;
             }
-
             ship.fireCooldown = Math.max(0f, ship.fireCooldown - dt);
-
             if (ship.isPlayer) updatePlayer(ship, dt);
             else updateBot(ship, dt);
-
             moveShip(ship, dt);
         }
 
@@ -192,8 +189,8 @@ public class GameView extends View {
         collectLoot();
 
         if (loot.size() < BASE_LOOT_COUNT) {
-            int replenish = Math.min(3, BASE_LOOT_COUNT - loot.size());
-            for (int i = 0; i < replenish; i++) spawnRandomLoot();
+            int amount = Math.min(5, BASE_LOOT_COUNT - loot.size());
+            for (int i = 0; i < amount; i++) spawnRandomLoot();
         }
     }
 
@@ -201,113 +198,77 @@ public class GameView extends View {
         if (joystickActive) {
             float dx = joystickX - joystickCx;
             float dy = joystickY - joystickCy;
-            float distance = (float) Math.sqrt(dx * dx + dy * dy);
-            float desired = (float) Math.atan2(dy, dx);
-            ship.angle = rotateTowards(ship.angle, desired, ship.turnRate * dt);
-            float throttle = clamp(distance / joystickRadius(), 0f, 1f);
+            float d = (float) Math.sqrt(dx * dx + dy * dy);
+            ship.angle = rotateTowards(ship.angle, (float) Math.atan2(dy, dx), ship.turnRate * dt);
+            float throttle = clamp(d / joystickRadius(), 0f, 1f);
             float targetSpeed = ship.baseSpeed() * (0.35f + 0.65f * throttle);
             ship.speed += (targetSpeed - ship.speed) * Math.min(1f, dt * 5f);
         } else {
-            float targetSpeed = ship.baseSpeed() * 0.26f;
+            float targetSpeed = ship.baseSpeed() * 0.28f;
             ship.speed += (targetSpeed - ship.speed) * Math.min(1f, dt * 3f);
         }
-
         if (fireHeld && ship.fireCooldown <= 0f) fireBroadside(ship);
     }
 
     private void updateBot(Ship ship, float dt) {
         ship.aiTimer -= dt;
         if (ship.aiTimer <= 0f) {
-            ship.aiTimer = 0.55f + random.nextFloat() * 0.75f;
-
+            ship.aiTimer = 0.75f + random.nextFloat() * 0.95f;
             if (ship.role == Role.MERCHANT) {
-                Ship threat = nearestHostile(ship, 520f);
+                Ship threat = nearestHostile(ship, 580f);
                 ship.target = threat;
-                if (threat != null) {
-                    ship.desiredAngle = (float) Math.atan2(ship.y - threat.y, ship.x - threat.x);
-                } else {
-                    ship.desiredAngle = normalizeAngle(ship.desiredAngle + (random.nextFloat() - 0.5f) * 0.85f);
-                }
+                if (threat != null) ship.desiredAngle = (float) Math.atan2(ship.y - threat.y, ship.x - threat.x);
+                else ship.desiredAngle = normalizeAngle(ship.desiredAngle + (random.nextFloat() - 0.5f) * 0.9f);
             } else {
-                ship.target = findBotTarget(ship);
+                ship.target = findTarget(ship);
                 if (ship.target != null) {
                     float bearing = (float) Math.atan2(ship.target.y - ship.y, ship.target.x - ship.x);
                     float d = distance(ship.x, ship.y, ship.target.x, ship.target.y);
-                    if (d < 520f) {
-                        ship.desiredAngle = normalizeAngle(bearing + ship.preferredSide * (float) Math.PI / 2f);
-                    } else {
-                        ship.desiredAngle = normalizeAngle(bearing + ship.preferredSide * 0.32f);
-                    }
+                    ship.desiredAngle = normalizeAngle(bearing + ship.preferredSide * (d < 600f ? 1.45f : 0.30f));
                 } else {
-                    ship.desiredAngle = normalizeAngle(ship.desiredAngle + (random.nextFloat() - 0.5f) * 1.0f);
+                    ship.desiredAngle = normalizeAngle(ship.desiredAngle + (random.nextFloat() - 0.5f) * 1.1f);
                 }
             }
-
-            avoidNearbyRock(ship);
+            avoidRock(ship);
         }
 
         ship.angle = rotateTowards(ship.angle, ship.desiredAngle, ship.turnRate * dt * 0.82f);
-        float targetSpeed = ship.baseSpeed();
-        if (ship.role == Role.MERCHANT) targetSpeed *= 1.08f;
-        ship.speed += (targetSpeed - ship.speed) * Math.min(1f, dt * 2.2f);
+        float targetSpeed = ship.baseSpeed() * (ship.role == Role.MERCHANT ? 1.06f : 1f);
+        ship.speed += (targetSpeed - ship.speed) * Math.min(1f, dt * 2.1f);
 
         if (ship.target != null && ship.target.alive && ship.fireCooldown <= 0f) {
-            float distance = distance(ship.x, ship.y, ship.target.x, ship.target.y);
+            float d = distance(ship.x, ship.y, ship.target.x, ship.target.y);
             float bearing = (float) Math.atan2(ship.target.y - ship.y, ship.target.x - ship.x);
             float delta = Math.abs(normalizeAngle(bearing - ship.angle));
             float broadsideError = Math.abs(delta - (float) Math.PI / 2f);
-            if (distance < 590f && broadsideError < 0.48f && random.nextFloat() < 0.12f) {
+            if (d < ship.shotRange() && broadsideError < 0.52f && random.nextFloat() < 0.14f) {
                 fireBroadside(ship);
-                ship.fireCooldown += 0.25f + random.nextFloat() * 0.45f;
-                if (random.nextFloat() < 0.18f) ship.preferredSide *= -1f;
+                if (random.nextFloat() < 0.16f) ship.preferredSide *= -1f;
             }
         }
     }
 
-    private void avoidNearbyRock(Ship ship) {
-        Rock nearest = null;
-        float best = 360f * 360f;
-        for (Rock rock : rocks) {
-            float d = distanceSq(ship.x, ship.y, rock.x, rock.y);
-            float range = rock.radius + 190f;
-            if (d < range * range && d < best) {
-                best = d;
-                nearest = rock;
-            }
-        }
-        if (nearest != null) {
-            float away = (float) Math.atan2(ship.y - nearest.y, ship.x - nearest.x);
-            ship.desiredAngle = normalizeAngle(away + ship.preferredSide * 0.35f);
-        }
-    }
-
-    private Ship findBotTarget(Ship ship) {
+    private Ship findTarget(Ship ship) {
         Ship best = null;
         float bestScore = Float.MAX_VALUE;
-
+        float maxRangeSq = 1050f * 1050f;
         for (Ship other : ships) {
             if (other == ship || !other.alive) continue;
+            float d = distanceSq(ship.x, ship.y, other.x, other.y);
+            if (d > maxRangeSq) continue;
 
-            float dSq = distanceSq(ship.x, ship.y, other.x, other.y);
-            if (dSq > 900f * 900f) continue;
-
-            float score = dSq;
-            if (other.isPlayer) score *= 1.35f;
-
+            float score = d;
+            if (other.isPlayer) score *= 1.45f;
             if (ship.role == Role.PIRATE) {
-                if (other.role == Role.MERCHANT) score *= 0.58f;
-                if (other.role == Role.PIRATE) score *= 1.18f;
-                if (other.role == Role.NAVY) score *= 1.08f;
+                if (other.role == Role.MERCHANT) score *= 0.50f;
+                else if (other.role == Role.PIRATE) score *= 1.15f;
+                else score *= 1.08f;
             } else if (ship.role == Role.NAVY) {
-                if (other.role == Role.PIRATE) score *= 0.58f;
-                if (other.role == Role.MERCHANT) score *= 1.65f;
-                if (other.isPlayer) score *= 0.86f;
+                if (other.role == Role.PIRATE) score *= 0.52f;
+                if (other.role == Role.MERCHANT) score *= 1.8f;
             }
-
-            if (other.level > ship.level + 1) score *= 1.30f;
-            if (other.level < ship.level - 1) score *= 0.90f;
-            score *= 0.86f + random.nextFloat() * 0.30f;
-
+            if (other.level > ship.level + 2) score *= 1.35f;
+            score *= 0.84f + random.nextFloat() * 0.34f;
             if (score < bestScore) {
                 bestScore = score;
                 best = other;
@@ -318,41 +279,50 @@ public class GameView extends View {
 
     private Ship nearestHostile(Ship ship, float range) {
         Ship best = null;
-        float bestDistance = range * range;
+        float bestD = range * range;
         for (Ship other : ships) {
-            if (other == ship || !other.alive) continue;
-            if (ship.role == Role.MERCHANT && other.role == Role.MERCHANT) continue;
+            if (other == ship || !other.alive || other.role == Role.MERCHANT) continue;
             float d = distanceSq(ship.x, ship.y, other.x, other.y);
-            if (d < bestDistance) {
-                bestDistance = d;
+            if (d < bestD) {
+                bestD = d;
                 best = other;
             }
         }
         return best;
     }
 
+    private void avoidRock(Ship ship) {
+        for (Rock rock : rocks) {
+            float range = rock.radius + 210f;
+            if (distanceSq(ship.x, ship.y, rock.x, rock.y) < range * range) {
+                float away = (float) Math.atan2(ship.y - rock.y, ship.x - rock.x);
+                ship.desiredAngle = normalizeAngle(away + ship.preferredSide * 0.45f);
+                return;
+            }
+        }
+    }
+
     private void moveShip(Ship ship, float dt) {
-        float windMultiplier = windMultiplier(ship);
-        ship.windBoost = windMultiplier > 1.10f;
+        float boost = windMultiplier(ship);
+        ship.windBoost = boost > 1.10f;
+        float nx = ship.x + (float) Math.cos(ship.angle) * ship.speed * boost * dt;
+        float ny = ship.y + (float) Math.sin(ship.angle) * ship.speed * boost * dt;
 
-        float proposedX = ship.x + (float) Math.cos(ship.angle) * ship.speed * windMultiplier * dt;
-        float proposedY = ship.y + (float) Math.sin(ship.angle) * ship.speed * windMultiplier * dt;
-
-        Rock collision = collidingRock(proposedX, proposedY, ship.radius() * 0.68f);
-        if (collision != null) {
-            float away = (float) Math.atan2(proposedY - collision.y, proposedX - collision.x);
-            float minDistance = collision.radius + ship.radius() * 0.72f;
-            ship.x = collision.x + (float) Math.cos(away) * minDistance;
-            ship.y = collision.y + (float) Math.sin(away) * minDistance;
-            ship.speed *= 0.36f;
-            ship.angle = normalizeAngle(ship.angle + (ship.isPlayer ? 0f : ship.preferredSide * 0.42f));
+        Rock hit = collidingRock(nx, ny, ship.radius() * 0.70f);
+        if (hit != null) {
+            float away = (float) Math.atan2(ny - hit.y, nx - hit.x);
+            float minD = hit.radius + ship.radius() * 0.74f;
+            ship.x = hit.x + (float) Math.cos(away) * minD;
+            ship.y = hit.y + (float) Math.sin(away) * minD;
+            ship.speed *= 0.30f;
+            if (!ship.isPlayer) ship.angle = normalizeAngle(ship.angle + ship.preferredSide * 0.5f);
             ship.desiredAngle = ship.angle;
         } else {
-            ship.x = proposedX;
-            ship.y = proposedY;
+            ship.x = nx;
+            ship.y = ny;
         }
 
-        float margin = 48f + ship.radius();
+        float margin = 55f + ship.radius();
         boolean bounced = false;
         if (ship.x < margin) { ship.x = margin; ship.angle = (float) Math.PI - ship.angle; bounced = true; }
         if (ship.x > WORLD_W - margin) { ship.x = WORLD_W - margin; ship.angle = (float) Math.PI - ship.angle; bounced = true; }
@@ -362,82 +332,71 @@ public class GameView extends View {
     }
 
     private float windMultiplier(Ship ship) {
-        float multiplier = 1f;
-        for (WindZone zone : windZones) {
-            if (distanceSq(ship.x, ship.y, zone.x, zone.y) > zone.radius * zone.radius) continue;
-            float headingError = Math.abs(normalizeAngle(ship.angle - zone.angle));
-            if (headingError < 1.25f) {
-                float alignment = 1f - headingError / 1.25f;
-                multiplier = Math.max(multiplier, 1f + (zone.strength - 1f) * (0.35f + 0.65f * alignment));
-            } else {
-                multiplier = Math.max(multiplier, 1.05f);
-            }
+        float result = 1f;
+        for (WindZone z : windZones) {
+            if (distanceSq(ship.x, ship.y, z.x, z.y) > z.radius * z.radius) continue;
+            float error = Math.abs(normalizeAngle(ship.angle - z.angle));
+            if (error < 1.25f) {
+                float alignment = 1f - error / 1.25f;
+                result = Math.max(result, 1f + (z.strength - 1f) * (0.30f + alignment * 0.70f));
+            } else result = Math.max(result, 1.04f);
         }
-        return multiplier;
+        return result;
     }
 
-    private Rock collidingRock(float x, float y, float extraRadius) {
+    private Rock collidingRock(float x, float y, float extra) {
         for (Rock rock : rocks) {
-            float r = rock.radius + extraRadius;
+            float r = rock.radius + extra;
             if (distanceSq(x, y, rock.x, rock.y) < r * r) return rock;
         }
         return null;
     }
 
     private void fireBroadside(Ship ship) {
-        if (!ship.alive || ship.fireCooldown > 0f || shopOpen || adOverlayTimer > 0f) return;
-
-        int gunsPerSide = 1 + (ship.level - 1) / 2;
-        float muzzleSpeed = 480f + ship.level * 18f;
-        float spread = 0.12f;
+        if (!ship.alive || ship.fireCooldown > 0f || buildTreeOpen || adOverlayTimer > 0f) return;
+        int guns = ship.gunsPerSide();
+        float muzzle = 490f + ship.level * 17f;
+        float spread = guns <= 2 ? 0.10f : 0.075f;
 
         for (int side = -1; side <= 1; side += 2) {
             float sideAngle = ship.angle + side * (float) Math.PI / 2f;
-            for (int gun = 0; gun < gunsPerSide; gun++) {
-                float offsetAlong = (gun - (gunsPerSide - 1) * 0.5f) * ship.radius() * 0.42f;
-                float forwardX = (float) Math.cos(ship.angle) * offsetAlong;
-                float forwardY = (float) Math.sin(ship.angle) * offsetAlong;
-                float sideX = (float) Math.cos(sideAngle) * ship.radius() * 0.78f;
-                float sideY = (float) Math.sin(sideAngle) * ship.radius() * 0.78f;
-                float shotAngle = sideAngle + (gun - (gunsPerSide - 1) * 0.5f) * spread;
-
-                Cannonball ball = new Cannonball();
-                ball.x = ship.x + forwardX + sideX;
-                ball.y = ship.y + forwardY + sideY;
-                ball.vx = (float) Math.cos(shotAngle) * muzzleSpeed + (float) Math.cos(ship.angle) * ship.speed * 0.28f;
-                ball.vy = (float) Math.sin(shotAngle) * muzzleSpeed + (float) Math.sin(ship.angle) * ship.speed * 0.28f;
-                ball.owner = ship;
-                ball.life = 1.28f;
-                cannonballs.add(ball);
+            for (int gun = 0; gun < guns; gun++) {
+                if (cannonballs.size() > 520) cannonballs.remove(0);
+                float along = (gun - (guns - 1) * 0.5f) * ship.radius() * 0.34f;
+                float shotAngle = sideAngle + (gun - (guns - 1) * 0.5f) * spread;
+                Cannonball b = new Cannonball();
+                b.x = ship.x + (float) Math.cos(ship.angle) * along + (float) Math.cos(sideAngle) * ship.radius() * 0.82f;
+                b.y = ship.y + (float) Math.sin(ship.angle) * along + (float) Math.sin(sideAngle) * ship.radius() * 0.82f;
+                b.vx = (float) Math.cos(shotAngle) * muzzle + (float) Math.cos(ship.angle) * ship.speed * 0.25f;
+                b.vy = (float) Math.sin(shotAngle) * muzzle + (float) Math.sin(ship.angle) * ship.speed * 0.25f;
+                b.life = ship.projectileLife();
+                b.owner = ship;
+                cannonballs.add(b);
             }
         }
-
-        ship.fireCooldown = Math.max(0.50f, 0.92f - ship.level * 0.055f);
+        ship.fireCooldown = ship.reloadTime();
     }
 
     private void updateCannonballs(float dt) {
         for (int i = cannonballs.size() - 1; i >= 0; i--) {
-            Cannonball ball = cannonballs.get(i);
-            ball.x += ball.vx * dt;
-            ball.y += ball.vy * dt;
-            ball.life -= dt;
-
-            boolean remove = ball.life <= 0f || ball.x < 0 || ball.y < 0 || ball.x > WORLD_W || ball.y > WORLD_H;
-            if (!remove && collidingRock(ball.x, ball.y, 4f) != null) remove = true;
-
+            Cannonball b = cannonballs.get(i);
+            b.x += b.vx * dt;
+            b.y += b.vy * dt;
+            b.life -= dt;
+            boolean remove = b.life <= 0f || b.x < 0f || b.y < 0f || b.x > WORLD_W || b.y > WORLD_H;
+            if (!remove && collidingRock(b.x, b.y, 4f) != null) remove = true;
             if (!remove) {
                 for (Ship ship : ships) {
-                    if (ship == ball.owner || !ship.alive) continue;
-                    float hitRadius = ship.radius() * 0.78f;
-                    if (distanceSq(ball.x, ball.y, ship.x, ship.y) <= hitRadius * hitRadius) {
-                        ship.hp -= 15f + ball.owner.level * 2.2f;
+                    if (ship == b.owner || !ship.alive) continue;
+                    float r = ship.radius() * 0.78f;
+                    if (distanceSq(b.x, b.y, ship.x, ship.y) <= r * r) {
+                        ship.hp -= b.owner.shotDamage();
                         remove = true;
-                        if (ship.hp <= 0f) sinkShip(ship, ball.owner);
+                        if (ship.hp <= 0f) sinkShip(ship, b.owner);
                         break;
                     }
                 }
             }
-
             if (remove) cannonballs.remove(i);
         }
     }
@@ -446,35 +405,33 @@ public class GameView extends View {
         if (!victim.alive) return;
         victim.alive = false;
         victim.speed = 0f;
-        victim.respawnTimer = victim.isPlayer ? 2.25f : 2.5f + random.nextFloat() * 1.8f;
+        victim.respawnTimer = victim.isPlayer ? 2.4f : 3f + random.nextFloat() * 2.5f;
 
-        int drops = 5 + victim.level * 3;
+        int drops = 4 + Math.min(16, victim.level * 2);
         for (int i = 0; i < drops; i++) {
-            Loot piece = new Loot();
-            float angle = random.nextFloat() * (float) Math.PI * 2f;
-            float radius = 18f + random.nextFloat() * 85f;
-            piece.x = clamp(victim.x + (float) Math.cos(angle) * radius, 30f, WORLD_W - 30f);
-            piece.y = clamp(victim.y + (float) Math.sin(angle) * radius, 30f, WORLD_H - 30f);
-            piece.value = 7 + victim.level * 2 + random.nextInt(9);
-            piece.coinValue = 1 + random.nextInt(Math.max(2, victim.level + 1));
-            piece.phase = random.nextFloat() * 6f;
-            loot.add(piece);
+            Loot l = new Loot();
+            float a = random.nextFloat() * (float) Math.PI * 2f;
+            float d = 15f + random.nextFloat() * 95f;
+            l.x = clamp(victim.x + (float) Math.cos(a) * d, 40f, WORLD_W - 40f);
+            l.y = clamp(victim.y + (float) Math.sin(a) * d, 40f, WORLD_H - 40f);
+            l.value = 6 + victim.level * 3 + random.nextInt(8);
+            l.coinValue = 1 + random.nextInt(Math.max(2, victim.level));
+            l.phase = random.nextFloat() * 6f;
+            loot.add(l);
         }
 
         if (killer != null && killer.alive) {
-            killer.xp += 16 + victim.level * 18;
-            killer.hp = Math.min(killer.maxHp, killer.hp + 8f + victim.level * 2f);
-            if (killer.isPlayer) {
-                addCoins(8 + victim.level * 4);
-            }
+            killer.xp += 12 + victim.level * 20;
+            killer.hp = Math.min(killer.maxHp, killer.hp + 6f + victim.level * 2f);
+            if (killer.isPlayer) addCoins(Math.round((7 + victim.level * 4) * killer.coinMultiplier()));
             checkLevel(killer);
         }
 
         if (victim.isPlayer) {
-            deathMessageTimer = 2.25f;
+            deathMessageTimer = 2.4f;
             deathCount++;
             if (deathCount >= nextAdDeath) {
-                adOverlayTimer = 2.35f;
+                adOverlayTimer = 2.3f;
                 nextAdDeath = deathCount + 2 + random.nextInt(2);
             }
         }
@@ -482,24 +439,22 @@ public class GameView extends View {
 
     private void collectLoot() {
         for (int i = loot.size() - 1; i >= 0; i--) {
-            Loot piece = loot.get(i);
+            Loot l = loot.get(i);
             Ship collector = null;
             float best = Float.MAX_VALUE;
-
             for (Ship ship : ships) {
                 if (!ship.alive) continue;
-                float pickup = ship.radius() + 20f;
-                float d = distanceSq(piece.x, piece.y, ship.x, ship.y);
-                if (d < pickup * pickup && d < best) {
+                float r = ship.radius() + 20f;
+                float d = distanceSq(l.x, l.y, ship.x, ship.y);
+                if (d < r * r && d < best) {
                     best = d;
                     collector = ship;
                 }
             }
-
             if (collector != null) {
-                collector.xp += piece.value;
+                collector.xp += l.value;
                 collector.hp = Math.min(collector.maxHp, collector.hp + 1.4f);
-                if (collector.isPlayer) addCoins(piece.coinValue);
+                if (collector.isPlayer) addCoins(Math.max(1, Math.round(l.coinValue * collector.coinMultiplier())));
                 checkLevel(collector);
                 loot.remove(i);
             }
@@ -512,18 +467,53 @@ public class GameView extends View {
     }
 
     private void checkLevel(Ship ship) {
-        int newLevel = ship.level;
-        while (newLevel < MAX_LEVEL && ship.xp >= LEVEL_THRESHOLDS[newLevel + 1]) newLevel++;
-        if (newLevel != ship.level) configureForLevel(ship, newLevel, false);
+        if (ship.level >= MAX_LEVEL) return;
+        int desired = ship.level;
+        while (desired < MAX_LEVEL && ship.xp >= LEVEL_THRESHOLDS[desired + 1]) desired++;
+
+        if (ship.branch == Branch.BASE && desired >= 6) {
+            if (ship.isPlayer) {
+                ship.xp = Math.max(ship.xp, LEVEL_THRESHOLDS[6]);
+                buildTreeOpen = true;
+                return;
+            }
+            ship.branch = randomBranch();
+        }
+        if (desired != ship.level) configureForLevel(ship, desired, false);
+    }
+
+    private void chooseBranch(Branch branch) {
+        player.branch = branch;
+        configureForLevel(player, Math.max(6, player.level), false);
+        buildTreeOpen = false;
+        prefs.edit().putString("last_branch", branch.name()).apply();
+    }
+
+    private Branch randomBranch() {
+        int r = random.nextInt(3);
+        return r == 0 ? Branch.RAIDER : r == 1 ? Branch.GUNNER : Branch.HUNTER;
     }
 
     private void configureForLevel(Ship ship, int level, boolean fullHeal) {
-        float previousMax = ship.maxHp;
+        float oldMax = ship.maxHp;
         ship.level = clampInt(level, 1, MAX_LEVEL);
-        ship.maxHp = 82f + ship.level * 38f;
-        ship.turnRate = 2.55f - ship.level * 0.18f;
-        if (fullHeal || previousMax <= 0f) ship.hp = ship.maxHp;
-        else ship.hp = Math.min(ship.maxHp, ship.hp + (ship.maxHp - previousMax) + 24f);
+        float baseHp = 80f + ship.level * 38f;
+        float baseTurn = Math.max(1.05f, 2.55f - ship.level * 0.13f);
+        if (ship.branch == Branch.RAIDER) {
+            ship.maxHp = baseHp * 0.84f;
+            ship.turnRate = baseTurn * 1.24f;
+        } else if (ship.branch == Branch.GUNNER) {
+            ship.maxHp = baseHp * 1.30f;
+            ship.turnRate = baseTurn * 0.82f;
+        } else if (ship.branch == Branch.HUNTER) {
+            ship.maxHp = baseHp * 1.04f;
+            ship.turnRate = baseTurn * 1.05f;
+        } else {
+            ship.maxHp = baseHp;
+            ship.turnRate = baseTurn;
+        }
+        if (fullHeal || oldMax <= 0f) ship.hp = ship.maxHp;
+        else ship.hp = Math.min(ship.maxHp, ship.hp + Math.max(18f, ship.maxHp - oldMax + 14f));
     }
 
     private void respawnShip(Ship ship) {
@@ -535,26 +525,23 @@ public class GameView extends View {
         ship.fireCooldown = 1f;
         ship.target = null;
         ship.windBoost = false;
+        ship.branch = Branch.BASE;
 
         if (ship.isPlayer) {
             ship.xp = 0;
             configureForLevel(ship, 1, true);
         } else {
-            int level = ship.role == Role.NAVY && random.nextFloat() < 0.4f ? 2 : 1;
-            ship.xp = xpForLevel(level) + random.nextInt(28);
+            int level = random.nextFloat() < 0.12f ? 3 : random.nextFloat() < 0.35f ? 2 : 1;
+            ship.xp = LEVEL_THRESHOLDS[level] + random.nextInt(30);
             configureForLevel(ship, level, true);
         }
     }
 
-    private int xpForLevel(int level) {
-        return LEVEL_THRESHOLDS[clampInt(level, 1, MAX_LEVEL)];
-    }
-
     private void safeRandomPosition(Ship ship) {
-        for (int tries = 0; tries < 40; tries++) {
+        for (int tries = 0; tries < 60; tries++) {
             float x = 180f + random.nextFloat() * (WORLD_W - 360f);
             float y = 180f + random.nextFloat() * (WORLD_H - 360f);
-            if (collidingRock(x, y, 100f) == null) {
+            if (collidingRock(x, y, 110f) == null) {
                 ship.x = x;
                 ship.y = y;
                 return;
@@ -565,16 +552,17 @@ public class GameView extends View {
     }
 
     private void spawnRandomLoot() {
-        Loot piece = new Loot();
         for (int tries = 0; tries < 20; tries++) {
-            piece.x = 55f + random.nextFloat() * (WORLD_W - 110f);
-            piece.y = 55f + random.nextFloat() * (WORLD_H - 110f);
-            if (collidingRock(piece.x, piece.y, 20f) == null) break;
+            Loot l = new Loot();
+            l.x = 70f + random.nextFloat() * (WORLD_W - 140f);
+            l.y = 70f + random.nextFloat() * (WORLD_H - 140f);
+            if (collidingRock(l.x, l.y, 25f) != null) continue;
+            l.value = 5 + random.nextInt(11);
+            l.coinValue = 1 + random.nextInt(3);
+            l.phase = random.nextFloat() * 6f;
+            loot.add(l);
+            return;
         }
-        piece.value = 6 + random.nextInt(10);
-        piece.coinValue = random.nextFloat() < 0.26f ? 2 : 1;
-        piece.phase = random.nextFloat() * 6f;
-        loot.add(piece);
     }
 
     private void drawGame(Canvas canvas) {
@@ -583,140 +571,102 @@ public class GameView extends View {
         if (w <= 0 || h <= 0) return;
 
         paint.setStyle(Paint.Style.FILL);
-        paint.setColor(Color.rgb(25, 132, 171));
+        paint.setColor(Color.rgb(24, 130, 170));
         canvas.drawRect(0, 0, w, h, paint);
 
-        float zoom = clamp(1.04f - (player.level - 1) * 0.055f, 0.78f, 1.04f);
-        float cameraX = player.x;
-        float cameraY = player.y;
-
+        float zoom = clamp(1.06f - (player.level - 1) * 0.030f, 0.74f, 1.06f);
         canvas.save();
         canvas.translate(w * 0.5f, h * 0.5f);
         canvas.scale(zoom, zoom);
-        canvas.translate(-cameraX, -cameraY);
+        canvas.translate(-player.x, -player.y);
 
-        drawWaterDetails(canvas, cameraX, cameraY, w / zoom, h / zoom);
-        drawWorldBorder(canvas);
-        drawWindZones(canvas);
+        drawWater(canvas);
+        drawWind(canvas);
+        drawBorder(canvas);
         drawRocks(canvas);
         drawLoot(canvas);
         drawCannonballs(canvas);
 
-        ArrayList<Ship> renderShips = new ArrayList<>(ships);
-        Collections.sort(renderShips, (a, b) -> Float.compare(a.y, b.y));
-        for (Ship ship : renderShips) if (ship.alive) drawShip(canvas, ship);
-
+        ArrayList<Ship> ordered = new ArrayList<>(ships);
+        Collections.sort(ordered, (a, b) -> Float.compare(a.y, b.y));
+        for (Ship ship : ordered) if (ship.alive) drawShip(canvas, ship);
         canvas.restore();
-        drawHud(canvas);
 
-        if (shopOpen) drawShop(canvas);
+        drawHud(canvas);
+        if (buildTreeOpen) drawBuildTree(canvas);
         if (adOverlayTimer > 0f) drawAdPlaceholder(canvas);
     }
 
-    private void drawWaterDetails(Canvas canvas, float cameraX, float cameraY, float visibleW, float visibleH) {
-        paint.setStrokeWidth(2f);
+    private void drawWater(Canvas canvas) {
         paint.setStyle(Paint.Style.STROKE);
-        paint.setColor(Color.argb(65, 214, 244, 255));
-
-        float left = Math.max(0f, cameraX - visibleW * 0.62f);
-        float right = Math.min(WORLD_W, cameraX + visibleW * 0.62f);
-        float top = Math.max(0f, cameraY - visibleH * 0.62f);
-        float bottom = Math.min(WORLD_H, cameraY + visibleH * 0.62f);
-
-        int gx0 = (int) (left / 180f) - 1;
-        int gx1 = (int) (right / 180f) + 1;
-        int gy0 = (int) (top / 150f) - 1;
-        int gy1 = (int) (bottom / 150f) + 1;
-
-        for (int gx = gx0; gx <= gx1; gx++) {
-            for (int gy = gy0; gy <= gy1; gy++) {
-                float x = gx * 180f + 35f + ((gy & 1) == 0 ? 0f : 55f);
-                float y = gy * 150f + 30f;
-                float wobble = (float) Math.sin(worldTime * 1.4f + gx * 0.8f + gy) * 7f;
-                RectF arc = new RectF(x - 22f + wobble, y - 8f, x + 22f + wobble, y + 14f);
-                canvas.drawArc(arc, 205f, 130f, false, paint);
+        paint.setStrokeWidth(2f);
+        paint.setColor(Color.argb(52, 220, 247, 255));
+        float left = Math.max(0f, player.x - 1000f);
+        float right = Math.min(WORLD_W, player.x + 1000f);
+        float top = Math.max(0f, player.y - 700f);
+        float bottom = Math.min(WORLD_H, player.y + 700f);
+        for (float x = (float) Math.floor(left / 180f) * 180f; x < right; x += 180f) {
+            for (float y = (float) Math.floor(top / 150f) * 150f; y < bottom; y += 150f) {
+                float wobble = (float) Math.sin(worldTime * 1.3f + x * 0.004f + y * 0.006f) * 8f;
+                canvas.drawArc(new RectF(x - 22f + wobble, y - 7f, x + 22f + wobble, y + 14f), 205f, 130f, false, paint);
             }
         }
         paint.setStyle(Paint.Style.FILL);
     }
 
-    private void drawWorldBorder(Canvas canvas) {
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(14f);
-        paint.setColor(Color.argb(210, 215, 244, 245));
-        canvas.drawRect(12f, 12f, WORLD_W - 12f, WORLD_H - 12f, paint);
-        paint.setStrokeWidth(4f);
-        paint.setColor(Color.argb(180, 7, 71, 94));
-        canvas.drawRect(22f, 22f, WORLD_W - 22f, WORLD_H - 22f, paint);
-        paint.setStyle(Paint.Style.FILL);
-    }
-
-    private void drawWindZones(Canvas canvas) {
-        for (WindZone zone : windZones) {
-            paint.setColor(Color.argb(24, 225, 250, 255));
-            canvas.drawCircle(zone.x, zone.y, zone.radius, paint);
-
+    private void drawWind(Canvas canvas) {
+        for (WindZone z : windZones) {
+            paint.setColor(Color.argb(24, 232, 252, 255));
+            canvas.drawCircle(z.x, z.y, z.radius, paint);
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(4f);
-            paint.setColor(Color.argb(115, 225, 250, 255));
-            canvas.drawCircle(zone.x, zone.y, zone.radius, paint);
-
-            float ux = (float) Math.cos(zone.angle);
-            float uy = (float) Math.sin(zone.angle);
+            paint.setColor(Color.argb(105, 232, 252, 255));
+            canvas.drawCircle(z.x, z.y, z.radius, paint);
+            float ux = (float) Math.cos(z.angle);
+            float uy = (float) Math.sin(z.angle);
             for (int i = -2; i <= 2; i++) {
-                float px = zone.x - uy * i * 58f;
-                float py = zone.y + ux * i * 58f;
-                float x1 = px - ux * 105f;
-                float y1 = py - uy * 105f;
-                float x2 = px + ux * 105f;
-                float y2 = py + uy * 105f;
-                canvas.drawLine(x1, y1, x2, y2, paint);
-                canvas.drawLine(x2, y2, x2 - ux * 28f - uy * 16f, y2 - uy * 28f + ux * 16f, paint);
-                canvas.drawLine(x2, y2, x2 - ux * 28f + uy * 16f, y2 - uy * 28f - ux * 16f, paint);
+                float px = z.x - uy * i * 65f;
+                float py = z.y + ux * i * 65f;
+                canvas.drawLine(px - ux * 100f, py - uy * 100f, px + ux * 100f, py + uy * 100f, paint);
             }
             paint.setStyle(Paint.Style.FILL);
         }
     }
 
+    private void drawBorder(Canvas canvas) {
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(16f);
+        paint.setColor(Color.argb(210, 214, 245, 247));
+        canvas.drawRect(12f, 12f, WORLD_W - 12f, WORLD_H - 12f, paint);
+        paint.setStyle(Paint.Style.FILL);
+    }
+
     private void drawRocks(Canvas canvas) {
-        for (Rock rock : rocks) {
-            paint.setColor(Color.argb(65, 0, 25, 35));
-            canvas.drawOval(new RectF(rock.x - rock.radius * 1.15f, rock.y + rock.radius * 0.30f,
-                    rock.x + rock.radius * 1.15f, rock.y + rock.radius * 0.72f), paint);
-            paint.setColor(Color.rgb(91, 103, 104));
-            canvas.drawCircle(rock.x, rock.y, rock.radius, paint);
-            paint.setColor(Color.rgb(129, 139, 137));
-            canvas.drawCircle(rock.x - rock.radius * 0.22f, rock.y - rock.radius * 0.22f, rock.radius * 0.64f, paint);
-            paint.setColor(Color.rgb(167, 174, 165));
-            canvas.drawCircle(rock.x - rock.radius * 0.36f, rock.y - rock.radius * 0.38f, rock.radius * 0.22f, paint);
+        for (Rock r : rocks) {
+            paint.setColor(Color.argb(60, 0, 20, 28));
+            canvas.drawOval(new RectF(r.x - r.radius * 1.15f, r.y + r.radius * 0.30f, r.x + r.radius * 1.15f, r.y + r.radius * 0.75f), paint);
+            paint.setColor(Color.rgb(89, 101, 102));
+            canvas.drawCircle(r.x, r.y, r.radius, paint);
+            paint.setColor(Color.rgb(139, 147, 143));
+            canvas.drawCircle(r.x - r.radius * 0.22f, r.y - r.radius * 0.25f, r.radius * 0.58f, paint);
         }
     }
 
     private void drawLoot(Canvas canvas) {
-        for (Loot piece : loot) {
-            float bob = (float) Math.sin(worldTime * 2.2f + piece.phase) * 3f;
-            float x = piece.x;
-            float y = piece.y + bob;
-
-            paint.setColor(Color.argb(70, 0, 0, 0));
-            canvas.drawOval(new RectF(x - 14f, y + 9f, x + 14f, y + 17f), paint);
-
+        for (Loot l : loot) {
+            if (Math.abs(l.x - player.x) > 1250f || Math.abs(l.y - player.y) > 900f) continue;
+            float bob = (float) Math.sin(worldTime * 2.2f + l.phase) * 3f;
             paint.setColor(Color.rgb(120, 70, 27));
-            canvas.drawRoundRect(new RectF(x - 13f, y - 9f, x + 13f, y + 10f), 4f, 4f, paint);
+            canvas.drawRoundRect(new RectF(l.x - 12f, l.y - 8f + bob, l.x + 12f, l.y + 9f + bob), 4f, 4f, paint);
             paint.setColor(Color.rgb(243, 190, 44));
-            canvas.drawRect(x - 13f, y - 3f, x + 13f, y + 2f, paint);
-            canvas.drawRect(x - 2f, y - 9f, x + 3f, y + 10f, paint);
+            canvas.drawRect(l.x - 12f, l.y - 2f + bob, l.x + 12f, l.y + 2f + bob, paint);
         }
     }
 
     private void drawCannonballs(Canvas canvas) {
-        for (Cannonball ball : cannonballs) {
-            paint.setColor(Color.argb(80, 0, 0, 0));
-            canvas.drawCircle(ball.x + 5f, ball.y + 7f, 7f, paint);
-            paint.setColor(Color.rgb(30, 34, 37));
-            canvas.drawCircle(ball.x, ball.y, 7f, paint);
-            paint.setColor(Color.argb(180, 236, 244, 244));
-            canvas.drawCircle(ball.x - 2f, ball.y - 2f, 2f, paint);
+        for (Cannonball b : cannonballs) {
+            paint.setColor(Color.rgb(29, 33, 36));
+            canvas.drawCircle(b.x, b.y, 7f, paint);
         }
     }
 
@@ -726,109 +676,71 @@ public class GameView extends View {
         canvas.translate(ship.x, ship.y);
         canvas.rotate((float) Math.toDegrees(ship.angle));
 
-        paint.setColor(Color.argb(70, 0, 20, 28));
-        canvas.drawOval(new RectF(-r * 1.05f, -r * 0.66f + 8f, r * 1.20f, r * 0.66f + 14f), paint);
-
+        paint.setColor(Color.argb(65, 0, 20, 28));
+        canvas.drawOval(new RectF(-r * 1.05f, -r * 0.65f + 9f, r * 1.18f, r * 0.65f + 14f), paint);
         if (ship.windBoost) {
             paint.setStyle(Paint.Style.STROKE);
             paint.setStrokeWidth(5f);
-            paint.setColor(Color.argb(150, 223, 250, 255));
-            canvas.drawLine(-r * 1.70f, -r * 0.24f, -r * 1.02f, -r * 0.14f, paint);
-            canvas.drawLine(-r * 1.82f, r * 0.20f, -r * 1.02f, r * 0.12f, paint);
+            paint.setColor(Color.argb(145, 225, 250, 255));
+            canvas.drawLine(-r * 1.75f, -r * 0.22f, -r * 1.05f, -r * 0.12f, paint);
+            canvas.drawLine(-r * 1.85f, r * 0.20f, -r * 1.05f, r * 0.10f, paint);
             paint.setStyle(Paint.Style.FILL);
         }
 
-        int hullColor = hullColorFor(ship);
-        int sailColor = sailColorFor(ship);
-
         path.reset();
-        path.moveTo(r * 1.18f, 0f);
-        path.lineTo(r * 0.48f, r * 0.67f);
+        path.moveTo(r * 1.20f, 0f);
+        path.lineTo(r * 0.46f, r * 0.68f);
         path.lineTo(-r * 0.92f, r * 0.56f);
         path.lineTo(-r * 1.10f, 0f);
         path.lineTo(-r * 0.92f, -r * 0.56f);
-        path.lineTo(r * 0.48f, -r * 0.67f);
+        path.lineTo(r * 0.46f, -r * 0.68f);
         path.close();
-        paint.setColor(hullColor);
+        paint.setColor(hullColor(ship));
         canvas.drawPath(path, paint);
 
-        path.reset();
-        path.moveTo(r * 0.78f, 0f);
-        path.lineTo(r * 0.34f, r * 0.43f);
-        path.lineTo(-r * 0.73f, r * 0.37f);
-        path.lineTo(-r * 0.82f, 0f);
-        path.lineTo(-r * 0.73f, -r * 0.37f);
-        path.lineTo(r * 0.34f, -r * 0.43f);
-        path.close();
-        paint.setColor(ship.isPlayer && selectedSkin == 2 ? Color.rgb(142, 157, 162) : Color.rgb(193, 139, 73));
-        canvas.drawPath(path, paint);
+        paint.setColor(Color.rgb(193, 139, 73));
+        canvas.drawRoundRect(new RectF(-r * 0.78f, -r * 0.36f, r * 0.60f, r * 0.36f), 9f, 9f, paint);
 
-        int cannons = Math.min(4, 1 + ship.level);
-        paint.setColor(Color.rgb(35, 35, 36));
-        for (int i = 0; i < cannons; i++) {
-            float t = cannons == 1 ? 0f : (i / (float) (cannons - 1) - 0.5f);
-            float cx = t * r * 1.1f - r * 0.10f;
-            canvas.drawCircle(cx, -r * 0.56f, 4.2f + ship.level * 0.35f, paint);
-            canvas.drawCircle(cx, r * 0.56f, 4.2f + ship.level * 0.35f, paint);
+        int visibleGuns = Math.min(6, ship.gunsPerSide());
+        paint.setColor(Color.rgb(32, 34, 36));
+        for (int i = 0; i < visibleGuns; i++) {
+            float t = visibleGuns == 1 ? 0f : i / (float) (visibleGuns - 1) - 0.5f;
+            float gx = t * r * 1.20f - r * 0.06f;
+            canvas.drawCircle(gx, -r * 0.57f, 4.4f, paint);
+            canvas.drawCircle(gx, r * 0.57f, 4.4f, paint);
         }
 
-        int mastCount = ship.level <= 2 ? 1 : ship.level <= 4 ? 2 : 3;
-        for (int mast = 0; mast < mastCount; mast++) {
-            float mx = mastCount == 1 ? 0f : -r * 0.38f + mast * r * 0.38f;
-            paint.setColor(Color.rgb(76, 48, 25));
-            canvas.drawRect(mx - 3f, -r * 0.58f, mx + 3f, r * 0.58f, paint);
-
-            float sailHalf = r * (0.34f - mast * 0.025f);
-            path.reset();
-            path.moveTo(mx - r * 0.09f, -sailHalf);
-            path.lineTo(mx + r * 0.22f, -sailHalf * 0.72f);
-            path.lineTo(mx + r * 0.22f, sailHalf * 0.72f);
-            path.lineTo(mx - r * 0.09f, sailHalf);
-            path.close();
-            paint.setColor(sailColor);
-            canvas.drawPath(path, paint);
+        int masts = ship.level <= 2 ? 1 : ship.level <= 5 ? 2 : ship.level <= 8 ? 3 : 4;
+        for (int i = 0; i < masts; i++) {
+            float mx = masts == 1 ? 0f : -r * 0.48f + i * (r * 0.96f / (masts - 1));
+            paint.setColor(Color.rgb(73, 46, 24));
+            canvas.drawRect(mx - 3f, -r * 0.56f, mx + 3f, r * 0.56f, paint);
+            paint.setColor(sailColor(ship));
+            canvas.drawRoundRect(new RectF(mx - r * 0.10f, -r * 0.38f, mx + r * 0.25f, r * 0.38f), 5f, 5f, paint);
         }
-
-        paint.setColor(flagColorFor(ship));
-        float flagX = -r * 0.55f;
-        canvas.drawRect(flagX - 2f, -r * 0.22f, flagX + 2f, r * 0.12f, paint);
-        path.reset();
-        path.moveTo(flagX + 2f, -r * 0.22f);
-        path.lineTo(flagX + r * 0.38f, -r * 0.11f);
-        path.lineTo(flagX + 2f, 0f);
-        path.close();
-        canvas.drawPath(path, paint);
-
-        if (ship.isPlayer) {
-            paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(4f);
-            paint.setColor(selectedSkin == 3 ? Color.rgb(244, 214, 89) : Color.rgb(248, 213, 73));
-            canvas.drawPath(hullOutline(r), paint);
-            paint.setStyle(Paint.Style.FILL);
-        }
-
         canvas.restore();
 
         float barW = r * 1.8f;
         float barY = ship.y - r - 26f;
-        paint.setColor(Color.argb(150, 8, 20, 27));
-        canvas.drawRoundRect(new RectF(ship.x - barW / 2, barY, ship.x + barW / 2, barY + 8f), 4f, 4f, paint);
-        float hpRatio = clamp(ship.hp / ship.maxHp, 0f, 1f);
-        paint.setColor(hpRatio > 0.45f ? Color.rgb(71, 205, 95) : Color.rgb(233, 73, 62));
-        canvas.drawRoundRect(new RectF(ship.x - barW / 2, barY, ship.x - barW / 2 + barW * hpRatio, barY + 8f), 4f, 4f, paint);
-
+        paint.setColor(Color.argb(150, 7, 22, 28));
+        canvas.drawRoundRect(new RectF(ship.x - barW / 2f, barY, ship.x + barW / 2f, barY + 8f), 4f, 4f, paint);
+        paint.setColor(ship.hp / ship.maxHp > 0.42f ? Color.rgb(69, 202, 94) : Color.rgb(232, 71, 61));
+        canvas.drawRoundRect(new RectF(ship.x - barW / 2f, barY, ship.x - barW / 2f + barW * clamp(ship.hp / ship.maxHp, 0f, 1f), barY + 8f), 4f, 4f, paint);
         paint.setTextAlign(Paint.Align.CENTER);
         paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        paint.setTextSize(18f + ship.level * 1.2f);
+        paint.setTextSize(17f + Math.min(5, ship.level) * 1.1f);
         paint.setColor(Color.WHITE);
         canvas.drawText(ship.name, ship.x, barY - 5f, paint);
         paint.setTypeface(android.graphics.Typeface.DEFAULT);
     }
 
-    private int hullColorFor(Ship ship) {
+    private int hullColor(Ship ship) {
         if (!ship.isPlayer) {
-            if (ship.role == Role.NAVY) return Color.rgb(48, 63, 92);
-            if (ship.role == Role.MERCHANT) return Color.rgb(116, 81, 42);
+            if (ship.role == Role.NAVY) return Color.rgb(47, 62, 94);
+            if (ship.role == Role.MERCHANT) return Color.rgb(119, 83, 43);
+            if (ship.branch == Branch.RAIDER) return Color.rgb(84, 43, 48);
+            if (ship.branch == Branch.GUNNER) return Color.rgb(58, 63, 67);
+            if (ship.branch == Branch.HUNTER) return Color.rgb(62, 82, 65);
             return Color.rgb(82, 46, 31);
         }
         switch (selectedSkin) {
@@ -839,39 +751,14 @@ public class GameView extends View {
         }
     }
 
-    private int sailColorFor(Ship ship) {
-        if (!ship.isPlayer) {
-            if (ship.role == Role.NAVY) return Color.rgb(226, 235, 244);
-            return Color.rgb(218, 205, 172);
-        }
+    private int sailColor(Ship ship) {
+        if (!ship.isPlayer) return ship.role == Role.NAVY ? Color.rgb(229, 236, 244) : Color.rgb(220, 207, 175);
         switch (selectedSkin) {
-            case 1: return Color.rgb(70, 18, 25);
-            case 2: return Color.rgb(210, 229, 229);
+            case 1: return Color.rgb(72, 20, 26);
+            case 2: return Color.rgb(211, 230, 230);
             case 3: return Color.rgb(245, 229, 174);
             default: return Color.rgb(245, 229, 191);
         }
-    }
-
-    private int flagColorFor(Ship ship) {
-        if (!ship.isPlayer) return Color.rgb(32, 34, 39);
-        switch (selectedSkin) {
-            case 1: return Color.rgb(224, 44, 47);
-            case 2: return Color.rgb(225, 238, 240);
-            case 3: return Color.rgb(244, 202, 49);
-            default: return Color.rgb(224, 44, 47);
-        }
-    }
-
-    private Path hullOutline(float r) {
-        Path outline = new Path();
-        outline.moveTo(r * 1.18f, 0f);
-        outline.lineTo(r * 0.48f, r * 0.67f);
-        outline.lineTo(-r * 0.92f, r * 0.56f);
-        outline.lineTo(-r * 1.10f, 0f);
-        outline.lineTo(-r * 0.92f, -r * 0.56f);
-        outline.lineTo(r * 0.48f, -r * 0.67f);
-        outline.close();
-        return outline;
     }
 
     private void drawHud(Canvas canvas) {
@@ -879,321 +766,168 @@ public class GameView extends View {
         float h = getHeight();
         float base = Math.min(w, h);
         float pad = base * 0.026f;
-        float titleSize = base * 0.060f;
-        float normal = base * 0.030f;
-        float small = base * 0.022f;
 
         paint.setTextAlign(Paint.Align.LEFT);
         paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        paint.setTextSize(titleSize);
+        paint.setTextSize(base * 0.052f);
         paint.setColor(Color.WHITE);
-        paint.setShadowLayer(5f, 0f, 3f, Color.argb(120, 0, 0, 0));
-        canvas.drawText("PIRAT.IO", pad, pad + titleSize * 0.78f, paint);
-        paint.clearShadowLayer();
+        canvas.drawText("PIRAT.IO", pad, pad + base * 0.045f, paint);
 
-        paint.setTextSize(normal);
+        paint.setTextSize(base * 0.025f);
         paint.setColor(Color.rgb(247, 223, 146));
-        canvas.drawText("Lv. " + player.level + "  " + SHIP_TITLES[player.level], pad, pad + titleSize + normal * 0.72f, paint);
+        canvas.drawText("Lv. " + player.level + "  " + classTitle(player), pad, pad + base * 0.083f, paint);
+        canvas.drawText("COINS  " + coins + "   •   100 BOTS", pad, pad + base * 0.118f, paint);
 
-        float statTop = pad + titleSize + normal * 1.15f;
-        float statW = base * 0.42f;
-        float statH = base * 0.025f;
-        drawBar(canvas, pad, statTop, statW, statH, player.hp / player.maxHp,
-                Color.rgb(59, 205, 91), "HULL " + Math.max(0, Math.round(player.hp)) + "/" + Math.round(player.maxHp), small);
-
-        if (player.level < MAX_LEVEL) {
+        float barW = base * 0.40f;
+        float barH = base * 0.023f;
+        drawBar(canvas, pad, pad + base * 0.137f, barW, barH, player.hp / player.maxHp, Color.rgb(63, 202, 91), "HULL");
+        float progress;
+        if (player.level >= MAX_LEVEL) progress = 1f;
+        else {
             int from = LEVEL_THRESHOLDS[player.level];
             int to = LEVEL_THRESHOLDS[player.level + 1];
-            float progress = clamp((player.xp - from) / (float) (to - from), 0f, 1f);
-            drawBar(canvas, pad, statTop + statH + base * 0.016f, statW, statH, progress,
-                    Color.rgb(245, 185, 48), "INFAMY " + player.xp + "/" + to, small);
-        } else {
-            drawBar(canvas, pad, statTop + statH + base * 0.016f, statW, statH, 1f,
-                    Color.rgb(245, 185, 48), "MAX SHIP  •  INFAMY " + player.xp, small);
+            progress = clamp((player.xp - from) / (float) Math.max(1, to - from), 0f, 1f);
         }
+        drawBar(canvas, pad, pad + base * 0.176f, barW, barH, progress, Color.rgb(242, 181, 45), player.level >= MAX_LEVEL ? "MAX" : "INFAMY");
 
-        float coinY = statTop + statH * 2f + base * 0.042f;
-        paint.setTextSize(small * 1.08f);
-        paint.setColor(Color.rgb(255, 222, 92));
-        canvas.drawText("COINS  " + coins, pad, coinY, paint);
-        if (player.windBoost && player.alive) {
-            paint.setColor(Color.rgb(221, 250, 255));
-            canvas.drawText("TAILWIND  •  SPEED BOOST", pad, coinY + small * 1.35f, paint);
-        }
-
-        drawLeaderboard(canvas, w, base, pad, small);
-        drawShopButton(canvas, w, base, pad, small);
+        drawLeaderboard(canvas, w, base, pad);
         drawControls(canvas, w, h, base);
 
-        if (deathMessageTimer > 0f || !player.alive) {
+        if (!player.alive || deathMessageTimer > 0f) {
             paint.setColor(Color.argb(145, 5, 17, 25));
-            canvas.drawRect(0, h * 0.35f, w, h * 0.65f, paint);
+            canvas.drawRect(0, h * 0.37f, w, h * 0.63f, paint);
             paint.setTextAlign(Paint.Align.CENTER);
-            paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-            paint.setTextSize(base * 0.09f);
+            paint.setTextSize(base * 0.078f);
             paint.setColor(Color.WHITE);
             canvas.drawText("SUNK!", w * 0.5f, h * 0.48f, paint);
-            paint.setTextSize(base * 0.034f);
+            paint.setTextSize(base * 0.027f);
             paint.setColor(Color.rgb(244, 215, 130));
-            canvas.drawText("Respawning as a Sloop...", w * 0.5f, h * 0.56f, paint);
+            canvas.drawText("Respawning as a Sloop...", w * 0.5f, h * 0.55f, paint);
         }
-
         paint.setTypeface(android.graphics.Typeface.DEFAULT);
     }
 
-    private void drawBar(Canvas canvas, float x, float y, float width, float height, float ratio, int fillColor, String label, float textSize) {
+    private void drawBar(Canvas canvas, float x, float y, float width, float height, float ratio, int color, String label) {
         paint.setColor(Color.argb(165, 8, 25, 34));
-        canvas.drawRoundRect(new RectF(x, y, x + width, y + height), height * 0.5f, height * 0.5f, paint);
-        paint.setColor(fillColor);
-        float inner = Math.max(height, width * clamp(ratio, 0f, 1f));
-        canvas.drawRoundRect(new RectF(x, y, x + Math.min(width, inner), y + height), height * 0.5f, height * 0.5f, paint);
-        paint.setTextSize(textSize);
+        canvas.drawRoundRect(new RectF(x, y, x + width, y + height), height / 2f, height / 2f, paint);
+        paint.setColor(color);
+        canvas.drawRoundRect(new RectF(x, y, x + width * clamp(ratio, 0f, 1f), y + height), height / 2f, height / 2f, paint);
+        paint.setTextSize(height * 0.75f);
         paint.setTextAlign(Paint.Align.LEFT);
         paint.setColor(Color.WHITE);
         canvas.drawText(label, x + 7f, y + height - 3f, paint);
     }
 
-    private void drawLeaderboard(Canvas canvas, float w, float base, float pad, float small) {
+    private void drawLeaderboard(Canvas canvas, float w, float base, float pad) {
         ArrayList<Ship> ranking = new ArrayList<>(ships);
         Collections.sort(ranking, (a, b) -> Integer.compare(b.xp, a.xp));
-
-        float panelW = base * 0.42f;
-        float rowH = base * 0.035f;
-        float panelH = rowH * 6.4f;
+        float panelW = base * 0.45f;
+        float rowH = base * 0.031f;
         float left = w - pad - panelW;
         float top = pad;
-
         paint.setColor(Color.argb(150, 6, 29, 39));
-        canvas.drawRoundRect(new RectF(left, top, w - pad, top + panelH), 18f, 18f, paint);
+        canvas.drawRoundRect(new RectF(left, top, w - pad, top + rowH * 8.7f), 16f, 16f, paint);
         paint.setTextAlign(Paint.Align.LEFT);
         paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        paint.setTextSize(small * 1.05f);
+        paint.setTextSize(base * 0.020f);
         paint.setColor(Color.rgb(248, 220, 130));
-        canvas.drawText("TOP PIRATES", left + 14f, top + rowH * 0.82f, paint);
-
-        int count = Math.min(5, ranking.size());
-        for (int i = 0; i < count; i++) {
-            Ship ship = ranking.get(i);
-            float y = top + rowH * (i + 1.65f);
-            paint.setTextSize(small);
-            paint.setColor(ship.isPlayer ? Color.rgb(255, 224, 88) : Color.WHITE);
-            String line = String.format(Locale.US, "%d. %-12s %4d", i + 1, trimName(ship.name, 12), ship.xp);
-            canvas.drawText(line, left + 14f, y, paint);
+        canvas.drawText("TOP PIRATES", left + 12f, top + rowH * 0.82f, paint);
+        for (int i = 0; i < Math.min(7, ranking.size()); i++) {
+            Ship s = ranking.get(i);
+            paint.setColor(s.isPlayer ? Color.rgb(255, 224, 88) : Color.WHITE);
+            canvas.drawText(String.format(Locale.US, "%d. %-11s %4d", i + 1, trim(s.name, 11), s.xp), left + 12f, top + rowH * (i + 1.72f), paint);
         }
-        paint.setTypeface(android.graphics.Typeface.DEFAULT);
-    }
-
-    private String trimName(String name, int max) {
-        return name.length() <= max ? name : name.substring(0, max - 1) + "…";
-    }
-
-    private RectF shopButtonRect(float w, float base, float pad) {
-        float bw = base * 0.26f;
-        float bh = base * 0.055f;
-        return new RectF(w * 0.5f - bw * 0.5f, pad, w * 0.5f + bw * 0.5f, pad + bh);
-    }
-
-    private void drawShopButton(Canvas canvas, float w, float base, float pad, float small) {
-        RectF r = shopButtonRect(w, base, pad);
-        paint.setColor(Color.argb(185, 78, 47, 25));
-        canvas.drawRoundRect(r, 14f, 14f, paint);
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(base * 0.004f);
-        paint.setColor(Color.rgb(245, 205, 91));
-        canvas.drawRoundRect(r, 14f, 14f, paint);
-        paint.setStyle(Paint.Style.FILL);
-        paint.setTextAlign(Paint.Align.CENTER);
-        paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        paint.setTextSize(small * 1.05f);
-        paint.setColor(Color.WHITE);
-        canvas.drawText("SKINS", r.centerX(), r.centerY() + small * 0.35f, paint);
         paint.setTypeface(android.graphics.Typeface.DEFAULT);
     }
 
     private void drawControls(Canvas canvas, float w, float h, float base) {
         float jr = joystickRadius();
-        float jcX = joystickActive ? joystickCx : jr * 1.45f;
-        float jcY = joystickActive ? joystickCy : h - jr * 1.38f;
-        float knobX = joystickActive ? joystickX : jcX;
-        float knobY = joystickActive ? joystickY : jcY;
-
-        float dx = knobX - jcX;
-        float dy = knobY - jcY;
+        float cx = joystickActive ? joystickCx : jr * 1.45f;
+        float cy = joystickActive ? joystickCy : h - jr * 1.38f;
+        float kx = joystickActive ? joystickX : cx;
+        float ky = joystickActive ? joystickY : cy;
+        float dx = kx - cx;
+        float dy = ky - cy;
         float d = (float) Math.sqrt(dx * dx + dy * dy);
-        if (d > jr) {
-            knobX = jcX + dx / d * jr;
-            knobY = jcY + dy / d * jr;
-        }
-
+        if (d > jr) { kx = cx + dx / d * jr; ky = cy + dy / d * jr; }
         paint.setColor(Color.argb(70, 255, 255, 255));
-        canvas.drawCircle(jcX, jcY, jr, paint);
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(base * 0.006f);
-        paint.setColor(Color.argb(150, 255, 255, 255));
-        canvas.drawCircle(jcX, jcY, jr, paint);
-        paint.setStyle(Paint.Style.FILL);
-        paint.setColor(Color.argb(170, 11, 52, 67));
-        canvas.drawCircle(knobX, knobY, jr * 0.42f, paint);
+        canvas.drawCircle(cx, cy, jr, paint);
+        paint.setColor(Color.argb(175, 11, 52, 67));
+        canvas.drawCircle(kx, ky, jr * 0.42f, paint);
 
-        float fireR = jr * 0.88f;
-        float fireX = w - fireR * 1.52f;
-        float fireY = h - fireR * 1.48f;
-        paint.setColor(Color.argb(fireHeld ? 220 : 165, 125, 42, 31));
-        canvas.drawCircle(fireX, fireY, fireR, paint);
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(base * 0.007f);
-        paint.setColor(Color.argb(210, 255, 228, 179));
-        canvas.drawCircle(fireX, fireY, fireR, paint);
-        paint.setStyle(Paint.Style.FILL);
+        float fr = jr * 0.88f;
+        float fx = w - fr * 1.52f;
+        float fy = h - fr * 1.48f;
+        paint.setColor(Color.argb(fireHeld ? 220 : 170, 125, 42, 31));
+        canvas.drawCircle(fx, fy, fr, paint);
         paint.setTextAlign(Paint.Align.CENTER);
         paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        paint.setTextSize(base * 0.030f);
+        paint.setTextSize(base * 0.028f);
         paint.setColor(Color.WHITE);
-        canvas.drawText("FIRE", fireX, fireY + base * 0.010f, paint);
+        canvas.drawText("FIRE", fx, fy + base * 0.010f, paint);
         paint.setTypeface(android.graphics.Typeface.DEFAULT);
     }
 
-    private void drawShop(Canvas canvas) {
+    private void drawBuildTree(Canvas canvas) {
         float w = getWidth();
         float h = getHeight();
         float base = Math.min(w, h);
-        paint.setColor(Color.argb(215, 4, 18, 25));
-        canvas.drawRect(0, 0, w, h, paint);
-
-        RectF panel = new RectF(w * 0.07f, h * 0.08f, w * 0.93f, h * 0.92f);
-        paint.setColor(Color.rgb(18, 62, 76));
-        canvas.drawRoundRect(panel, 26f, 26f, paint);
-
-        paint.setTextAlign(Paint.Align.LEFT);
+        paint.setColor(Color.argb(225, 3, 17, 24));
+        canvas.drawRect(0f, 0f, w, h, paint);
+        paint.setTextAlign(Paint.Align.CENTER);
         paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        paint.setTextSize(base * 0.055f);
+        paint.setTextSize(base * 0.062f);
         paint.setColor(Color.WHITE);
-        canvas.drawText("CAPTAIN'S OUTFITTER", panel.left + base * 0.035f, panel.top + base * 0.07f, paint);
-        paint.setTextSize(base * 0.027f);
-        paint.setColor(Color.rgb(255, 222, 92));
-        canvas.drawText("COINS  " + coins, panel.left + base * 0.035f, panel.top + base * 0.115f, paint);
-
-        RectF close = shopCloseRect(panel, base);
-        paint.setColor(Color.rgb(115, 45, 38));
-        canvas.drawRoundRect(close, 12f, 12f, paint);
-        paint.setTextAlign(Paint.Align.CENTER);
+        canvas.drawText("CHOOSE YOUR BUILD", w * 0.5f, h * 0.16f, paint);
         paint.setTextSize(base * 0.025f);
-        paint.setColor(Color.WHITE);
-        canvas.drawText("CLOSE", close.centerX(), close.centerY() + base * 0.009f, paint);
+        paint.setColor(Color.rgb(245, 215, 126));
+        canvas.drawText("Level 5 complete — your choice shapes levels 6–10", w * 0.5f, h * 0.22f, paint);
 
-        float gap = base * 0.020f;
-        float cardTop = panel.top + base * 0.15f;
-        float cardBottom = panel.top + base * 0.51f;
-        float usable = panel.width() - gap * 5f;
-        float cardW = usable / SKIN_NAMES.length;
-
-        for (int i = 0; i < SKIN_NAMES.length; i++) {
-            RectF card = new RectF(panel.left + gap + i * (cardW + gap), cardTop,
-                    panel.left + gap + i * (cardW + gap) + cardW, cardBottom);
-            boolean owned = (purchasedSkins & (1 << i)) != 0;
-            boolean selected = selectedSkin == i;
-
-            paint.setColor(selected ? Color.rgb(72, 104, 96) : Color.rgb(27, 79, 93));
-            canvas.drawRoundRect(card, 18f, 18f, paint);
-            paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(selected ? 5f : 2f);
-            paint.setColor(selected ? Color.rgb(255, 216, 82) : Color.argb(120, 220, 240, 244));
-            canvas.drawRoundRect(card, 18f, 18f, paint);
-            paint.setStyle(Paint.Style.FILL);
-
-            drawShopShipPreview(canvas, card.centerX(), card.top + card.height() * 0.32f, base * 0.055f, i);
-
-            paint.setTextAlign(Paint.Align.CENTER);
-            paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-            paint.setTextSize(base * 0.026f);
-            paint.setColor(Color.WHITE);
-            canvas.drawText(SKIN_NAMES[i], card.centerX(), card.top + card.height() * 0.62f, paint);
-
-            paint.setTextSize(base * 0.022f);
-            if (selected) {
-                paint.setColor(Color.rgb(255, 224, 88));
-                canvas.drawText("EQUIPPED", card.centerX(), card.top + card.height() * 0.80f, paint);
-            } else if (owned) {
-                paint.setColor(Color.rgb(201, 239, 211));
-                canvas.drawText("TAP TO EQUIP", card.centerX(), card.top + card.height() * 0.80f, paint);
-            } else {
-                paint.setColor(Color.rgb(255, 220, 109));
-                canvas.drawText(SKIN_COSTS[i] + " COINS", card.centerX(), card.top + card.height() * 0.80f, paint);
-            }
-        }
-
-        paint.setTextAlign(Paint.Align.LEFT);
-        paint.setTextSize(base * 0.026f);
-        paint.setColor(Color.WHITE);
-        canvas.drawText("COIN STORE  •  prototype purchase buttons", panel.left + gap, panel.top + base * 0.59f, paint);
-
-        int[] packs = {1000, 3000, 8000};
-        float packTop = panel.top + base * 0.625f;
-        float packH = base * 0.11f;
-        float packW = (panel.width() - gap * 4f) / 3f;
-        for (int i = 0; i < packs.length; i++) {
-            RectF r = new RectF(panel.left + gap + i * (packW + gap), packTop,
-                    panel.left + gap + i * (packW + gap) + packW, packTop + packH);
-            paint.setColor(Color.rgb(100, 70, 29));
-            canvas.drawRoundRect(r, 14f, 14f, paint);
-            paint.setTextAlign(Paint.Align.CENTER);
-            paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-            paint.setTextSize(base * 0.027f);
-            paint.setColor(Color.rgb(255, 222, 92));
-            canvas.drawText("+" + packs[i] + " COINS", r.centerX(), r.top + packH * 0.45f, paint);
-            paint.setTextSize(base * 0.018f);
-            paint.setColor(Color.WHITE);
-            canvas.drawText("TEST BUY", r.centerX(), r.top + packH * 0.76f, paint);
-        }
-
-        paint.setTextAlign(Paint.Align.CENTER);
-        paint.setTextSize(base * 0.020f);
-        paint.setColor(Color.argb(190, 230, 242, 244));
-        canvas.drawText("Real-money checkout will replace TEST BUY when Play Billing is connected.",
-                panel.centerX(), panel.bottom - base * 0.035f, paint);
-
-        if (storeMessageTimer > 0f) {
-            paint.setTextSize(base * 0.025f);
-            paint.setColor(Color.rgb(255, 225, 104));
-            canvas.drawText(storeMessage, panel.centerX(), panel.bottom - base * 0.075f, paint);
-        }
+        drawBranchCard(canvas, branchRect(0), Branch.RAIDER, "RAIDER", "Corsair → Sea Wraith → Phantom → Tempest → Blackwind", "+Speed  +Turn  +Reload\n-Hull  -Broadside weight", Color.rgb(125, 48, 55));
+        drawBranchCard(canvas, branchRect(1), Branch.GUNNER, "GUNNER", "Gunship → Bombard → Dreadnought → Leviathan → Iron Fortress", "+Hull  +Cannons  +Damage\n-Speed  -Turn", Color.rgb(70, 76, 82));
+        drawBranchCard(canvas, branchRect(2), Branch.HUNTER, "HUNTER", "Privateer → Marauder → Reaper → Executioner → Kraken Hunter", "+Reload  +Range  +Coins\nBalanced hull & speed", Color.rgb(62, 94, 70));
         paint.setTypeface(android.graphics.Typeface.DEFAULT);
     }
 
-    private RectF shopCloseRect(RectF panel, float base) {
-        float w = base * 0.16f;
-        float h = base * 0.055f;
-        return new RectF(panel.right - w - base * 0.025f, panel.top + base * 0.025f,
-                panel.right - base * 0.025f, panel.top + base * 0.025f + h);
+    private RectF branchRect(int index) {
+        float w = getWidth();
+        float h = getHeight();
+        float gap = w * 0.025f;
+        float leftMargin = w * 0.06f;
+        float usable = w - leftMargin * 2f - gap * 2f;
+        float cardW = usable / 3f;
+        float left = leftMargin + index * (cardW + gap);
+        return new RectF(left, h * 0.29f, left + cardW, h * 0.82f);
     }
 
-    private void drawShopShipPreview(Canvas canvas, float x, float y, float r, int skin) {
-        int oldSkin = selectedSkin;
-        selectedSkin = skin;
-        Ship fake = new Ship("", true, null);
-        fake.level = 3;
-        fake.x = x;
-        fake.y = y;
-        fake.angle = 0f;
-        fake.hp = 1f;
-        fake.maxHp = 1f;
-        float rr = r;
-        canvas.save();
-        canvas.translate(x, y);
-        path.reset();
-        path.moveTo(rr * 1.1f, 0f);
-        path.lineTo(rr * 0.4f, rr * 0.55f);
-        path.lineTo(-rr * 0.95f, rr * 0.48f);
-        path.lineTo(-rr * 1.05f, 0f);
-        path.lineTo(-rr * 0.95f, -rr * 0.48f);
-        path.lineTo(rr * 0.4f, -rr * 0.55f);
-        path.close();
-        paint.setColor(hullColorFor(fake));
-        canvas.drawPath(path, paint);
-        paint.setColor(sailColorFor(fake));
-        canvas.drawRect(-rr * 0.18f, -rr * 0.40f, rr * 0.20f, rr * 0.40f, paint);
-        canvas.restore();
-        selectedSkin = oldSkin;
+    private void drawBranchCard(Canvas canvas, RectF r, Branch branch, String title, String pathText, String stats, int color) {
+        float base = Math.min(getWidth(), getHeight());
+        paint.setColor(color);
+        canvas.drawRoundRect(r, 22f, 22f, paint);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(3f);
+        paint.setColor(Color.argb(180, 245, 235, 205));
+        canvas.drawRoundRect(r, 22f, 22f, paint);
+        paint.setStyle(Paint.Style.FILL);
+        paint.setTextAlign(Paint.Align.CENTER);
+        paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        paint.setTextSize(base * 0.038f);
+        paint.setColor(Color.WHITE);
+        canvas.drawText(title, r.centerX(), r.top + base * 0.070f, paint);
+        paint.setTextSize(base * 0.019f);
+        paint.setColor(Color.rgb(250, 221, 132));
+        drawCenteredLines(canvas, pathText, r.centerX(), r.top + base * 0.125f, base * 0.028f);
+        paint.setTextSize(base * 0.022f);
+        paint.setColor(Color.WHITE);
+        drawCenteredLines(canvas, stats, r.centerX(), r.top + base * 0.245f, base * 0.034f);
+        paint.setTextSize(base * 0.023f);
+        paint.setColor(Color.rgb(255, 226, 112));
+        canvas.drawText("TAP TO CHOOSE", r.centerX(), r.bottom - base * 0.055f, paint);
+    }
+
+    private void drawCenteredLines(Canvas canvas, String text, float x, float y, float lineHeight) {
+        String[] lines = text.split("\\n");
+        for (int i = 0; i < lines.length; i++) canvas.drawText(lines[i], x, y + i * lineHeight, paint);
     }
 
     private void drawAdPlaceholder(Canvas canvas) {
@@ -1204,15 +938,12 @@ public class GameView extends View {
         canvas.drawRect(0, 0, w, h, paint);
         paint.setTextAlign(Paint.Align.CENTER);
         paint.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
-        paint.setTextSize(base * 0.075f);
+        paint.setTextSize(base * 0.072f);
         paint.setColor(Color.WHITE);
-        canvas.drawText("AD BREAK", w * 0.5f, h * 0.46f, paint);
-        paint.setTextSize(base * 0.027f);
+        canvas.drawText("AD BREAK", w * 0.5f, h * 0.47f, paint);
+        paint.setTextSize(base * 0.025f);
         paint.setColor(Color.rgb(245, 214, 125));
-        canvas.drawText("Prototype interstitial • every 2–3 deaths", w * 0.5f, h * 0.54f, paint);
-        paint.setTextSize(base * 0.020f);
-        paint.setColor(Color.LTGRAY);
-        canvas.drawText("This screen will be replaced by the ad SDK.", w * 0.5f, h * 0.60f, paint);
+        canvas.drawText("Prototype interstitial • every 2–3 deaths", w * 0.5f, h * 0.55f, paint);
         paint.setTypeface(android.graphics.Typeface.DEFAULT);
     }
 
@@ -1225,23 +956,16 @@ public class GameView extends View {
         float y = event.getY(index);
 
         if (adOverlayTimer > 0f) return true;
-
-        if (shopOpen) {
-            if (action == MotionEvent.ACTION_DOWN) handleShopTap(x, y);
+        if (buildTreeOpen) {
+            if (action == MotionEvent.ACTION_DOWN) {
+                if (branchRect(0).contains(x, y)) chooseBranch(Branch.RAIDER);
+                else if (branchRect(1).contains(x, y)) chooseBranch(Branch.GUNNER);
+                else if (branchRect(2).contains(x, y)) chooseBranch(Branch.HUNTER);
+            }
             return true;
         }
 
         if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN) {
-            float base = Math.min(getWidth(), getHeight());
-            if (shopButtonRect(getWidth(), base, base * 0.026f).contains(x, y)) {
-                shopOpen = true;
-                joystickPointer = -1;
-                firePointer = -1;
-                joystickActive = false;
-                fireHeld = false;
-                return true;
-            }
-
             if (x < getWidth() * 0.60f && joystickPointer == -1) {
                 joystickPointer = pointerId;
                 joystickActive = true;
@@ -1256,18 +980,15 @@ public class GameView extends View {
             }
             return true;
         }
-
         if (action == MotionEvent.ACTION_MOVE) {
             for (int i = 0; i < event.getPointerCount(); i++) {
-                int id = event.getPointerId(i);
-                if (id == joystickPointer) {
+                if (event.getPointerId(i) == joystickPointer) {
                     joystickX = event.getX(i);
                     joystickY = event.getY(i);
                 }
             }
             return true;
         }
-
         if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP || action == MotionEvent.ACTION_CANCEL) {
             if (pointerId == joystickPointer || action == MotionEvent.ACTION_CANCEL) {
                 joystickPointer = -1;
@@ -1279,71 +1000,18 @@ public class GameView extends View {
             }
             return true;
         }
-
         return true;
     }
 
-    private void handleShopTap(float x, float y) {
-        float w = getWidth();
-        float h = getHeight();
-        float base = Math.min(w, h);
-        RectF panel = new RectF(w * 0.07f, h * 0.08f, w * 0.93f, h * 0.92f);
-
-        if (shopCloseRect(panel, base).contains(x, y)) {
-            shopOpen = false;
-            return;
-        }
-
-        float gap = base * 0.020f;
-        float cardTop = panel.top + base * 0.15f;
-        float cardBottom = panel.top + base * 0.51f;
-        float usable = panel.width() - gap * 5f;
-        float cardW = usable / SKIN_NAMES.length;
-
-        for (int i = 0; i < SKIN_NAMES.length; i++) {
-            RectF card = new RectF(panel.left + gap + i * (cardW + gap), cardTop,
-                    panel.left + gap + i * (cardW + gap) + cardW, cardBottom);
-            if (!card.contains(x, y)) continue;
-
-            boolean owned = (purchasedSkins & (1 << i)) != 0;
-            if (owned) {
-                selectedSkin = i;
-                prefs.edit().putInt("selected_skin", selectedSkin).apply();
-                showStoreMessage(SKIN_NAMES[i] + " equipped");
-            } else if (coins >= SKIN_COSTS[i]) {
-                coins -= SKIN_COSTS[i];
-                purchasedSkins |= (1 << i);
-                selectedSkin = i;
-                prefs.edit()
-                        .putInt("coins", coins)
-                        .putInt("skins", purchasedSkins)
-                        .putInt("selected_skin", selectedSkin)
-                        .apply();
-                showStoreMessage(SKIN_NAMES[i] + " purchased");
-            } else {
-                showStoreMessage("Not enough coins");
-            }
-            return;
-        }
-
-        int[] packs = {1000, 3000, 8000};
-        float packTop = panel.top + base * 0.625f;
-        float packH = base * 0.11f;
-        float packW = (panel.width() - gap * 4f) / 3f;
-        for (int i = 0; i < packs.length; i++) {
-            RectF r = new RectF(panel.left + gap + i * (packW + gap), packTop,
-                    panel.left + gap + i * (packW + gap) + packW, packTop + packH);
-            if (r.contains(x, y)) {
-                addCoins(packs[i]);
-                showStoreMessage("Prototype purchase: +" + packs[i] + " coins");
-                return;
-            }
-        }
+    private String classTitle(Ship ship) {
+        if (ship.level <= 5 || ship.branch == Branch.BASE) return BASE_TITLES[Math.min(5, ship.level)];
+        if (ship.branch == Branch.RAIDER) return RAIDER_TITLES[ship.level];
+        if (ship.branch == Branch.GUNNER) return GUNNER_TITLES[ship.level];
+        return HUNTER_TITLES[ship.level];
     }
 
-    private void showStoreMessage(String message) {
-        storeMessage = message;
-        storeMessageTimer = 2.2f;
+    private String trim(String name, int max) {
+        return name.length() <= max ? name : name.substring(0, max - 1) + "…";
     }
 
     private float joystickRadius() {
@@ -1352,8 +1020,7 @@ public class GameView extends View {
 
     private static float rotateTowards(float current, float target, float maxDelta) {
         float delta = normalizeAngle(target - current);
-        delta = clamp(delta, -maxDelta, maxDelta);
-        return normalizeAngle(current + delta);
+        return normalizeAngle(current + clamp(delta, -maxDelta, maxDelta));
     }
 
     private static float normalizeAngle(float angle) {
@@ -1372,20 +1039,22 @@ public class GameView extends View {
         return dx * dx + dy * dy;
     }
 
-    private static float clamp(float value, float min, float max) {
-        return Math.max(min, Math.min(max, value));
+    private static float clamp(float v, float min, float max) {
+        return Math.max(min, Math.min(max, v));
     }
 
-    private static int clampInt(int value, int min, int max) {
-        return Math.max(min, Math.min(max, value));
+    private static int clampInt(int v, int min, int max) {
+        return Math.max(min, Math.min(max, v));
     }
 
     private enum Role { MERCHANT, PIRATE, NAVY }
+    private enum Branch { BASE, RAIDER, GUNNER, HUNTER }
 
     private static class Ship {
-        final String name;
+        String name;
         final boolean isPlayer;
         final Role role;
+        Branch branch = Branch.BASE;
         float x;
         float y;
         float angle;
@@ -1411,14 +1080,55 @@ public class GameView extends View {
         }
 
         float radius() {
-            return 30f + level * 8.5f;
+            float base = 29f + level * 7.2f;
+            if (branch == Branch.RAIDER) base *= 0.90f;
+            if (branch == Branch.GUNNER) base *= 1.13f;
+            return base;
         }
 
         float baseSpeed() {
-            float speed = 184f - level * 8f;
-            if (role == Role.MERCHANT) speed += 12f;
-            if (role == Role.NAVY) speed += 4f;
-            return speed;
+            float v = 191f - level * 6.1f;
+            if (role == Role.MERCHANT) v += 14f;
+            if (role == Role.NAVY) v += 5f;
+            if (branch == Branch.RAIDER) v *= 1.20f;
+            else if (branch == Branch.GUNNER) v *= 0.82f;
+            else if (branch == Branch.HUNTER) v *= 1.03f;
+            return v;
+        }
+
+        int gunsPerSide() {
+            int guns = 1 + (level - 1) / 2;
+            if (branch == Branch.GUNNER) guns += 2;
+            if (branch == Branch.RAIDER && level >= 8) guns = Math.max(2, guns - 1);
+            return Math.min(7, guns);
+        }
+
+        float reloadTime() {
+            float t = Math.max(0.45f, 0.93f - level * 0.045f);
+            if (branch == Branch.RAIDER) t *= 0.78f;
+            else if (branch == Branch.GUNNER) t *= 1.08f;
+            else if (branch == Branch.HUNTER) t *= 0.86f;
+            return t;
+        }
+
+        float shotDamage() {
+            float d = 14f + level * 2.5f;
+            if (branch == Branch.GUNNER) d *= 1.22f;
+            else if (branch == Branch.RAIDER) d *= 0.92f;
+            else if (branch == Branch.HUNTER) d *= 1.08f;
+            return d;
+        }
+
+        float projectileLife() {
+            return branch == Branch.HUNTER ? 1.52f : 1.30f;
+        }
+
+        float shotRange() {
+            return branch == Branch.HUNTER ? 710f : 620f;
+        }
+
+        float coinMultiplier() {
+            return branch == Branch.HUNTER ? 1.35f : 1f;
         }
     }
 
