@@ -2,8 +2,9 @@ const http = require('http');
 const { WebSocketServer } = require('ws');
 
 const PORT = Number(process.env.PORT || 8080);
-const MATCH_SIZE = 20;
-const MIN_BOTS = 6;
+const MAX_HUMANS = 20;
+const BOT_COUNT = 100;
+const TOTAL_ENTITIES = MAX_HUMANS + BOT_COUNT;
 const ROOM_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 const rooms = new Map();
@@ -12,7 +13,7 @@ let nextClientId = 1;
 const server = http.createServer((req, res) => {
   if (req.url === '/health') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, rooms: rooms.size }));
+    res.end(JSON.stringify({ ok: true, rooms: rooms.size, maxHumans: MAX_HUMANS, botsPerRoom: BOT_COUNT }));
     return;
   }
   res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
@@ -59,7 +60,7 @@ wss.on('connection', (socket) => {
         send(socket, { type: 'join_rejected', reason: 'ROOM_NOT_FOUND', code });
         return;
       }
-      if (room.players.size >= MATCH_SIZE - MIN_BOTS) {
+      if (room.players.size >= MAX_HUMANS) {
         send(socket, { type: 'join_rejected', reason: 'ROOM_FULL', code });
         return;
       }
@@ -102,11 +103,8 @@ function leaveCurrentRoom(client) {
   if (!room) return;
 
   room.players.delete(client.id);
-  if (room.players.size === 0) {
-    rooms.delete(room.code);
-  } else {
-    broadcastRoom(room);
-  }
+  if (room.players.size === 0) rooms.delete(room.code);
+  else broadcastRoom(room);
 }
 
 function broadcastRoom(room) {
@@ -114,15 +112,15 @@ function broadcastRoom(room) {
     id: player.id,
     name: player.name,
   }));
-  const botSlots = Math.max(MIN_BOTS, MATCH_SIZE - humans.length);
 
   const snapshot = {
     type: 'room_state',
     code: room.code,
-    matchSize: MATCH_SIZE,
-    minimumBots: MIN_BOTS,
+    maxHumans: MAX_HUMANS,
+    botCount: BOT_COUNT,
+    totalEntityCapacity: TOTAL_ENTITIES,
     humans,
-    botSlots,
+    humanSlotsRemaining: MAX_HUMANS - humans.length,
   };
 
   for (const player of room.players.values()) send(player.socket, snapshot);
@@ -131,9 +129,7 @@ function broadcastRoom(room) {
 function createRoomCode() {
   for (let attempt = 0; attempt < 1000; attempt++) {
     let code = '';
-    for (let i = 0; i < 6; i++) {
-      code += ROOM_CHARS[Math.floor(Math.random() * ROOM_CHARS.length)];
-    }
+    for (let i = 0; i < 6; i++) code += ROOM_CHARS[Math.floor(Math.random() * ROOM_CHARS.length)];
     if (!rooms.has(code)) return code;
   }
   throw new Error('Unable to allocate room code');
@@ -149,5 +145,5 @@ function send(socket, payload) {
 }
 
 server.listen(PORT, () => {
-  console.log(`Pirat.io room server listening on :${PORT}`);
+  console.log(`Pirat.io room server listening on :${PORT} — ${MAX_HUMANS} humans + ${BOT_COUNT} bots per room`);
 });
