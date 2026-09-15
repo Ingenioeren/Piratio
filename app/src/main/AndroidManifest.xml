@@ -8,8 +8,13 @@
         android:label="Pirat.io"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
+
+        <meta-data
+            android:name="com.google.android.gms.games.APP_ID"
+            android:value="${playGamesAppId}" />
+
         <activity
-            android:name=".MainActivity"
+            android:name=".MainActivityV2"
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:screenOrientation="landscape"
             android:exported="true">
