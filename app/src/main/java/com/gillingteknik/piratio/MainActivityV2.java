@@ -44,7 +44,7 @@ public class MainActivityV2 extends Activity {
     private CloudProfileClient cloud;
     private PlayGamesAccountManager playGames;
     private boolean gameRunning;
-    private String accountState = "LOCAL SAVE";
+    private String accountState = "LOCAL PRACTICE";
     private boolean accountConnected;
 
     @Override
@@ -105,7 +105,7 @@ public class MainActivityV2 extends Activity {
 
         left.addView(label("PIRAT.IO", 46, Color.WHITE, true));
         left.addView(label("SAIL  •  LOOT  •  BUILD YOUR LEGEND", 15, Color.rgb(245, 215, 126), true), top(3));
-        left.addView(label("One huge sea • 100 bots • up to 20 captains\nGrow, choose a class after level 5, and keep your account progression.",
+        left.addView(label("One huge sea • 100 bots • up to 20 captains\nOnline progression is server-authoritative; local play is practice until the match server is live.",
                 15, Color.rgb(216, 236, 241), false), top(16));
 
         LinearLayout profile = new LinearLayout(this);
@@ -143,7 +143,7 @@ public class MainActivityV2 extends Activity {
         page.addView(actions, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 0.85f));
 
         Button play = menuButton("SET SAIL", Color.rgb(49, 153, 93));
-        play.setOnClickListener(v -> startGame("OPEN OCEAN"));
+        play.setOnClickListener(v -> startGame(accountConnected ? "PRACTICE • NO ACCOUNT REWARDS" : "LOCAL PRACTICE"));
         actions.addView(play, menuButtonParams());
 
         Button create = menuButton("CREATE PARTY", Color.rgb(55, 105, 161));
@@ -222,7 +222,7 @@ public class MainActivityV2 extends Activity {
         });
         content.addView(sync, menuButtonParams());
 
-        TextView note = label("Cloud save restores captain name, coins, skins and audio settings on devices using the same verified platform account.\nApple Game Center uses the same backend profile contract on iOS.",
+        TextView note = label("Cloud save restores the server copy of coins and owned skins. Editing local files cannot update the account wallet.\nApple Game Center uses the same authoritative backend contract on iOS.",
                 12, Color.rgb(184, 216, 224), false);
         note.setGravity(Gravity.CENTER);
         content.addView(note, top(7));
@@ -256,18 +256,36 @@ public class MainActivityV2 extends Activity {
             String suffix = selected == i ? " • EQUIPPED" : owned ? " • OWNED" : " • " + SKIN_COSTS[i] + " COINS";
             Button b = menuButton(SKIN_NAMES[i] + suffix, SKIN_COLORS[i]);
             b.setOnClickListener(v -> {
-                int coins = prefs.getInt("coins", 0);
-                int skins = prefs.getInt("skins", 1);
-                if ((skins & (1 << skin)) == 0) {
-                    if (coins < SKIN_COSTS[skin]) {
-                        Toast.makeText(this, "Not enough coins", Toast.LENGTH_SHORT).show();
+                if (accountConnected && cloud.hasSession()) {
+                    b.setEnabled(false);
+                    b.setText("CHECKING SERVER…");
+                    cloud.buyOrEquipSkin(skin, (success, message) -> {
+                        if (!success) {
+                            b.setEnabled(true);
+                            Toast.makeText(this, message, Toast.LENGTH_LONG).show();
+                            dialog.dismiss();
+                            showSkinsDialog();
+                            return;
+                        }
+                        dialog.dismiss();
+                        refreshProfileUi();
+                        showSkinsDialog();
+                    });
+                    return;
+                }
+
+                // Offline practice can preview cosmetics locally, but never writes to the account wallet.
+                int localCoins = prefs.getInt("coins", 0);
+                int localSkins = prefs.getInt("skins", 1);
+                if ((localSkins & (1 << skin)) == 0) {
+                    if (localCoins < SKIN_COSTS[skin]) {
+                        Toast.makeText(this, "Not enough local practice coins", Toast.LENGTH_SHORT).show();
                         return;
                     }
-                    coins -= SKIN_COSTS[skin];
-                    skins |= 1 << skin;
+                    localCoins -= SKIN_COSTS[skin];
+                    localSkins |= 1 << skin;
                 }
-                prefs.edit().putInt("coins", coins).putInt("skins", skins).putInt("selected_skin", skin).apply();
-                if (accountConnected) cloud.pushProfile(null);
+                prefs.edit().putInt("coins", localCoins).putInt("skins", localSkins).putInt("selected_skin", skin).apply();
                 dialog.dismiss();
                 showSkinsDialog();
                 refreshProfileUi();
@@ -275,7 +293,9 @@ public class MainActivityV2 extends Activity {
             content.addView(b, menuButtonParams());
         }
 
-        TextView storeNote = label("Real coin packs will be credited by the server only after Google Play / App Store purchase verification. Test coin buttons are removed from the account build.",
+        TextView storeNote = label(accountConnected
+                        ? "Account purchases are checked and deducted by the server. The APK cannot submit its own balance or unlock list."
+                        : "LOCAL PRACTICE: coins/skins here are not trusted account progression. Sign in for server-backed ownership.",
                 12, Color.rgb(184, 216, 224), false);
         storeNote.setGravity(Gravity.CENTER);
         content.addView(storeNote, top(8));
@@ -297,12 +317,12 @@ public class MainActivityV2 extends Activity {
         TextView code = label(roomCode, 34, Color.rgb(255, 222, 92), true);
         code.setGravity(Gravity.CENTER);
         content.addView(code, top(12));
-        TextView note = label("Party codes are wired to the room-server protocol. Until the server is deployed, this starts local practice in the same 100-bot ocean.",
+        TextView note = label("Party codes are wired to the room-server protocol. Until authoritative movement/combat is deployed, this remains local practice with no account rewards.",
                 13, Color.rgb(184, 216, 224), false);
         note.setGravity(Gravity.CENTER);
         content.addView(note, top(8));
         Button practice = menuButton("START PARTY PRACTICE", Color.rgb(49, 153, 93));
-        practice.setOnClickListener(v -> { dialog.dismiss(); startGame("PARTY " + roomCode + " • LOCAL"); });
+        practice.setOnClickListener(v -> { dialog.dismiss(); startGame("PARTY " + roomCode + " • PRACTICE"); });
         content.addView(practice, menuButtonParams());
         Button close = menuButton("CLOSE", Color.rgb(91, 56, 51));
         close.setOnClickListener(v -> dialog.dismiss());
@@ -335,7 +355,7 @@ public class MainActivityV2 extends Activity {
                 Toast.makeText(this, "Enter a 6-character room code", Toast.LENGTH_SHORT).show();
                 return;
             }
-            Toast.makeText(this, "Online room service still needs deployment. Code: " + code, Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Authoritative online match service is not deployed yet. Code: " + code, Toast.LENGTH_LONG).show();
         });
         content.addView(join, menuButtonParams());
         Button close = menuButton("CLOSE", Color.rgb(91, 56, 51));
@@ -347,7 +367,7 @@ public class MainActivityV2 extends Activity {
     }
 
     private void refreshProfileUi() {
-        if (coinsLabel != null) coinsLabel.setText("COINS  " + prefs.getInt("coins", 0));
+        if (coinsLabel != null) coinsLabel.setText((accountConnected ? "ACCOUNT COINS  " : "LOCAL COINS  ") + prefs.getInt("coins", 0));
         if (accountLabel != null) {
             accountLabel.setText(accountState);
             accountLabel.setTextColor(accountConnected ? Color.rgb(126, 225, 150) : Color.rgb(184, 216, 224));
@@ -399,7 +419,7 @@ public class MainActivityV2 extends Activity {
     @Deprecated
     public void onBackPressed() {
         if (gameRunning) {
-            if (accountConnected) cloud.pushProfile(null);
+            if (accountConnected) cloud.pullProfile((success, message) -> refreshProfileUi());
             showMainMenu();
             return;
         }
