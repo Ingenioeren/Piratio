@@ -7,20 +7,21 @@ import com.google.android.gms.games.GamesSignInClient;
 import com.google.android.gms.games.PlayGames;
 
 public final class PlayGamesAccountManager {
-    public interface Listener {
-        void onState(String state, boolean connected);
-    }
+    public interface Listener { void onState(String state, boolean connected); }
 
     private final Activity activity;
     private final CloudProfileClient cloud;
     private final Listener listener;
     private final GamesSignInClient signInClient;
+    private final IntegrityGuard integrity;
 
     public PlayGamesAccountManager(Activity activity, CloudProfileClient cloud, Listener listener) {
         this.activity = activity;
         this.cloud = cloud;
         this.listener = listener;
         this.signInClient = PlayGames.getGamesSignInClient(activity);
+        this.integrity = new IntegrityGuard(activity);
+        this.integrity.warmUp();
     }
 
     public boolean isConfigured() {
@@ -31,7 +32,7 @@ public final class PlayGamesAccountManager {
 
     public void connect(boolean interactive) {
         if (!isConfigured()) {
-            state("LOCAL SAVE • Play Console/backend IDs not configured", false);
+            state("LOCAL PRACTICE • account backend not configured", false);
             return;
         }
         state("Checking Play Games account…", false);
@@ -45,11 +46,8 @@ public final class PlayGamesAccountManager {
                 requestServerCode();
             } else if (interactive) {
                 signInClient.signIn().addOnCompleteListener(signTask -> {
-                    if (signTask.isSuccessful() && signTask.getResult() != null && signTask.getResult().isAuthenticated()) {
-                        requestServerCode();
-                    } else {
-                        state("Play Games sign-in cancelled", false);
-                    }
+                    if (signTask.isSuccessful() && signTask.getResult() != null && signTask.getResult().isAuthenticated()) requestServerCode();
+                    else state("Play Games sign-in cancelled", false);
                 });
             } else {
                 state("PLAY GAMES • tap Sync Account to sign in", false);
@@ -65,15 +63,30 @@ public final class PlayGamesAccountManager {
                         state("Could not obtain Play Games server code", false);
                         return;
                     }
-                    cloud.loginWithGoogleAuthCode(task.getResult(), (success, message) -> {
+                    String authCode = task.getResult();
+                    if (!integrity.isConfigured()) {
+                        // Debug/development builds can still exercise auth; production backend can require attestation.
+                        cloud.loginWithGoogleAuthCode(authCode, "", IntegrityGuard.hash("auth-google:" + authCode), this::finishLogin);
+                        return;
+                    }
+                    state("Verifying official app build…", false);
+                    integrity.tokenFor("auth-google:" + authCode, (success, token, requestHash, message) -> {
                         if (!success) {
                             state(message, false);
                             return;
                         }
-                        cloud.pullProfile((pullSuccess, pullMessage) ->
-                                state(pullSuccess ? "PLAY GAMES • CLOUD SYNCED" : message, true));
+                        cloud.loginWithGoogleAuthCode(authCode, token, requestHash, this::finishLogin);
                     });
                 });
+    }
+
+    private void finishLogin(boolean success, String message) {
+        if (!success) {
+            state(message, false);
+            return;
+        }
+        cloud.pullProfile((pullSuccess, pullMessage) ->
+                state(pullSuccess ? "PLAY GAMES • VERIFIED CLOUD" : message, true));
     }
 
     private void state(String text, boolean connected) {
