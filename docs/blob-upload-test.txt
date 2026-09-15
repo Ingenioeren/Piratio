@@ -1,0 +1,1 @@
+Binary assets use Git blob API in the final audio commit.
