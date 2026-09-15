@@ -76,6 +76,10 @@ public final class CloudProfileClient {
         }, "piratio-cloud-pull").start();
     }
 
+    /**
+     * Only non-authoritative preferences are ever uploaded by the client.
+     * Coins, owned skins, XP, HP, damage and rewards are intentionally absent.
+     */
     public void pushProfile(Callback callback) {
         if (!isConfigured() || !hasSession()) {
             if (callback != null) callback(callback, false, "No cloud session");
@@ -85,14 +89,12 @@ public final class CloudProfileClient {
             try {
                 JSONObject body = new JSONObject()
                         .put("captainName", prefs.getString("player_name", "Captain"))
-                        .put("coins", Math.max(0, prefs.getInt("coins", 0)))
-                        .put("skins", Math.max(1, prefs.getInt("skins", 1)))
                         .put("selectedSkin", Math.max(0, prefs.getInt("selected_skin", 0)))
                         .put("musicEnabled", prefs.getBoolean("music_enabled", true))
                         .put("sfxEnabled", prefs.getBoolean("sfx_enabled", true));
                 JSONObject response = request("PUT", "/api/profile", body, true);
                 if (response.has("profile")) mergeProfile(response.getJSONObject("profile"));
-                if (callback != null) callback(callback, true, "Cloud save synced");
+                if (callback != null) callback(callback, true, "Cloud preferences synced");
             } catch (Exception e) {
                 if (callback != null) callback(callback, false, shortError(e));
             }
@@ -102,6 +104,7 @@ public final class CloudProfileClient {
     private void mergeProfile(JSONObject profile) {
         SharedPreferences.Editor edit = prefs.edit();
         if (profile.has("captainName")) edit.putString("player_name", profile.optString("captainName", "Captain"));
+        // These values are server-authoritative. Local file edits are overwritten by the server copy.
         if (profile.has("coins")) edit.putInt("coins", Math.max(0, profile.optInt("coins", 0)));
         if (profile.has("skins")) edit.putInt("skins", Math.max(1, profile.optInt("skins", 1)));
         if (profile.has("selectedSkin")) edit.putInt("selected_skin", Math.max(0, profile.optInt("selectedSkin", 0)));
@@ -131,9 +134,7 @@ public final class CloudProfileClient {
         String text = readAll(stream);
         connection.disconnect();
         JSONObject json = text.isEmpty() ? new JSONObject() : new JSONObject(text);
-        if (code < 200 || code >= 300) {
-            throw new IllegalStateException(json.optString("error", "HTTP " + code));
-        }
+        if (code < 200 || code >= 300) throw new IllegalStateException(json.optString("error", "HTTP " + code));
         return json;
     }
 
