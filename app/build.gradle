@@ -5,6 +5,7 @@ plugins {
 def pgsWebClientId = (project.findProperty('PIRATIO_PGS_WEB_CLIENT_ID') ?: System.getenv('PIRATIO_PGS_WEB_CLIENT_ID') ?: '').toString()
 def pgsAppId = (project.findProperty('PIRATIO_PGS_APP_ID') ?: System.getenv('PIRATIO_PGS_APP_ID') ?: '0').toString()
 def apiBaseUrl = (project.findProperty('PIRATIO_API_BASE_URL') ?: System.getenv('PIRATIO_API_BASE_URL') ?: '').toString()
+def integrityProjectNumber = (project.findProperty('PIRATIO_INTEGRITY_PROJECT_NUMBER') ?: System.getenv('PIRATIO_INTEGRITY_PROJECT_NUMBER') ?: '0').toString()
 
 def javaString = { value -> '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"' }
 
@@ -16,11 +17,12 @@ android {
         applicationId 'com.gillingteknik.piratio'
         minSdk 24
         targetSdk 35
-        versionCode 5
-        versionName '0.5.0'
+        versionCode 6
+        versionName '0.6.0'
 
         buildConfigField 'String', 'PGS_WEB_CLIENT_ID', javaString(pgsWebClientId)
         buildConfigField 'String', 'API_BASE_URL', javaString(apiBaseUrl)
+        buildConfigField 'long', 'INTEGRITY_PROJECT_NUMBER', integrityProjectNumber + 'L'
         manifestPlaceholders = [playGamesAppId: pgsAppId]
     }
 
@@ -36,4 +38,5 @@ android {
 
 dependencies {
     implementation 'com.google.android.gms:play-services-games-v2:22.0.0'
+    implementation 'com.google.android.play:integrity:1.6.0'
 }
