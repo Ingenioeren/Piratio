@@ -29,57 +29,34 @@ public final class CloudProfileClient {
         this.baseUrl = trimSlash(BuildConfig.API_BASE_URL);
     }
 
-    public boolean isConfigured() {
-        return !baseUrl.isEmpty();
-    }
-
-    public boolean hasSession() {
-        return !prefs.getString("cloud_token", "").isEmpty();
-    }
-
-    public String providerLabel() {
-        return prefs.getString("cloud_provider", "LOCAL");
-    }
+    public boolean isConfigured() { return !baseUrl.isEmpty(); }
+    public boolean hasSession() { return !prefs.getString("cloud_token", "").isEmpty(); }
+    public String providerLabel() { return prefs.getString("cloud_provider", "LOCAL"); }
 
     public void loginWithGoogleAuthCode(String authCode, Callback callback) {
-        if (!isConfigured()) {
-            callback(callback, false, "Cloud server is not configured yet");
-            return;
-        }
+        if (!isConfigured()) { callback(callback, false, "Cloud server is not configured yet"); return; }
         new Thread(() -> {
             try {
-                JSONObject body = new JSONObject().put("serverAuthCode", authCode);
-                JSONObject response = request("POST", "/api/auth/google", body, false);
-                String token = response.getString("token");
-                prefs.edit().putString("cloud_token", token).putString("cloud_provider", "GOOGLE_PLAY").apply();
+                JSONObject response = request("POST", "/api/auth/google", new JSONObject().put("serverAuthCode", authCode), false);
+                prefs.edit().putString("cloud_token", response.getString("token")).putString("cloud_provider", "GOOGLE_PLAY").apply();
                 if (response.has("profile")) mergeProfile(response.getJSONObject("profile"));
                 callback(callback, true, "Play Games cloud profile connected");
-            } catch (Exception e) {
-                callback(callback, false, shortError(e));
-            }
+            } catch (Exception e) { callback(callback, false, shortError(e)); }
         }, "piratio-cloud-login").start();
     }
 
     public void pullProfile(Callback callback) {
-        if (!isConfigured() || !hasSession()) {
-            callback(callback, false, "No cloud session");
-            return;
-        }
+        if (!isConfigured() || !hasSession()) { callback(callback, false, "No cloud session"); return; }
         new Thread(() -> {
             try {
                 JSONObject response = request("GET", "/api/profile", null, true);
                 mergeProfile(response.getJSONObject("profile"));
                 callback(callback, true, "Cloud profile restored");
-            } catch (Exception e) {
-                callback(callback, false, shortError(e));
-            }
+            } catch (Exception e) { callback(callback, false, shortError(e)); }
         }, "piratio-cloud-pull").start();
     }
 
-    /**
-     * Only non-authoritative preferences are ever uploaded by the client.
-     * Coins, owned skins, XP, HP, damage and rewards are intentionally absent.
-     */
+    /** Only non-authoritative preferences are ever uploaded by the client. */
     public void pushProfile(Callback callback) {
         if (!isConfigured() || !hasSession()) {
             if (callback != null) callback(callback, false, "No cloud session");
@@ -101,10 +78,30 @@ public final class CloudProfileClient {
         }, "piratio-cloud-push").start();
     }
 
+    /**
+     * Server validates ownership/cost and performs the coin deduction atomically.
+     * The client never decides the resulting wallet balance or owned-skin bitset.
+     */
+    public void buyOrEquipSkin(int skin, Callback callback) {
+        if (!isConfigured() || !hasSession()) {
+            callback(callback, false, "Sign in to cloud before buying account skins");
+            return;
+        }
+        new Thread(() -> {
+            try {
+                JSONObject response = request("POST", "/api/shop/skin", new JSONObject().put("skin", skin), true);
+                if (response.has("profile")) mergeProfile(response.getJSONObject("profile"));
+                callback(callback, true, "Skin updated");
+            } catch (Exception e) {
+                callback(callback, false, shortError(e));
+            }
+        }, "piratio-skin-purchase").start();
+    }
+
     private void mergeProfile(JSONObject profile) {
         SharedPreferences.Editor edit = prefs.edit();
         if (profile.has("captainName")) edit.putString("player_name", profile.optString("captainName", "Captain"));
-        // These values are server-authoritative. Local file edits are overwritten by the server copy.
+        // Server-authoritative values overwrite any locally modified files.
         if (profile.has("coins")) edit.putInt("coins", Math.max(0, profile.optInt("coins", 0)));
         if (profile.has("skins")) edit.putInt("skins", Math.max(1, profile.optInt("skins", 1)));
         if (profile.has("selectedSkin")) edit.putInt("selected_skin", Math.max(0, profile.optInt("selectedSkin", 0)));
@@ -120,10 +117,7 @@ public final class CloudProfileClient {
         connection.setReadTimeout(9000);
         connection.setRequestProperty("Accept", "application/json");
         connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
-        if (authenticated) {
-            String token = prefs.getString("cloud_token", "");
-            connection.setRequestProperty("Authorization", "Bearer " + token);
-        }
+        if (authenticated) connection.setRequestProperty("Authorization", "Bearer " + prefs.getString("cloud_token", ""));
         if (body != null) {
             connection.setDoOutput(true);
             byte[] bytes = body.toString().getBytes(StandardCharsets.UTF_8);
