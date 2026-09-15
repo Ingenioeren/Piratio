@@ -1,0 +1,1 @@
+Binary soundtrack assets are committed as Git blobs rather than via the UTF-8 contents endpoint.
