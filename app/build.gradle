@@ -17,8 +17,8 @@ android {
         applicationId 'com.gillingteknik.piratio'
         minSdk 24
         targetSdk 35
-        versionCode 7
-        versionName '0.6.1'
+        versionCode 8
+        versionName '0.7.0'
 
         buildConfigField 'String', 'PGS_WEB_CLIENT_ID', javaString(pgsWebClientId)
         buildConfigField 'String', 'API_BASE_URL', javaString(apiBaseUrl)
@@ -39,4 +39,5 @@ android {
 dependencies {
     implementation 'com.google.android.gms:play-services-games-v2:22.0.0'
     implementation 'com.google.android.play:integrity:1.6.0'
+    implementation 'com.android.billingclient:billing:9.1.0'
 }
