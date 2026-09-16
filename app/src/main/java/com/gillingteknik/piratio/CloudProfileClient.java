@@ -30,6 +30,7 @@ public final class CloudProfileClient {
     public boolean isConfigured() { return !baseUrl.isEmpty(); }
     public boolean hasSession() { return !prefs.getString("cloud_token", "").isEmpty(); }
     public String providerLabel() { return prefs.getString("cloud_provider", "LOCAL"); }
+    public String accountId() { return prefs.getString("cloud_account_id", ""); }
 
     public void loginWithGoogleAuthCode(String authCode, String integrityToken, String requestHash, Callback callback) {
         if (!isConfigured()) { callback(callback, false, "Cloud server is not configured yet"); return; }
@@ -40,7 +41,11 @@ public final class CloudProfileClient {
                         .put("integrityToken", integrityToken == null ? "" : integrityToken)
                         .put("requestHash", requestHash == null ? "" : requestHash);
                 JSONObject response = request("POST", "/api/auth/google", body, false);
-                prefs.edit().putString("cloud_token", response.getString("token")).putString("cloud_provider", "GOOGLE_PLAY").apply();
+                SharedPreferences.Editor session = prefs.edit()
+                        .putString("cloud_token", response.getString("token"))
+                        .putString("cloud_provider", "GOOGLE_PLAY");
+                if (response.has("accountId")) session.putString("cloud_account_id", response.optString("accountId", ""));
+                session.apply();
                 if (response.has("profile")) mergeProfile(response.getJSONObject("profile"));
                 callback(callback, true, "Play Games cloud profile connected");
             } catch (Exception e) { callback(callback, false, shortError(e)); }
@@ -95,6 +100,27 @@ public final class CloudProfileClient {
         }, "piratio-skin-purchase").start();
     }
 
+    /**
+     * The client only forwards Google's purchase token. The backend verifies the token with
+     * Google Play, decides the coin amount, records an idempotent wallet entry and consumes it.
+     */
+    public void submitGooglePurchase(String productId, String purchaseToken, Callback callback) {
+        if (!isConfigured() || !hasSession() || accountId().isEmpty()) {
+            callback(callback, false, "Sign in with Play Games before buying coins");
+            return;
+        }
+        new Thread(() -> {
+            try {
+                JSONObject body = new JSONObject()
+                        .put("productId", productId)
+                        .put("purchaseToken", purchaseToken);
+                JSONObject response = request("POST", "/api/shop/google-purchase", body, true);
+                if (response.has("profile")) mergeProfile(response.getJSONObject("profile"));
+                callback(callback, true, "Coins added to your account");
+            } catch (Exception e) { callback(callback, false, shortError(e)); }
+        }, "piratio-google-purchase").start();
+    }
+
     private void mergeProfile(JSONObject profile) {
         SharedPreferences.Editor edit = prefs.edit();
         if (profile.has("captainName")) edit.putString("player_name", profile.optString("captainName", "Captain"));
@@ -110,7 +136,7 @@ public final class CloudProfileClient {
         HttpURLConnection connection = (HttpURLConnection) new URL(baseUrl + path).openConnection();
         connection.setRequestMethod(method);
         connection.setConnectTimeout(7000);
-        connection.setReadTimeout(9000);
+        connection.setReadTimeout(10000);
         connection.setRequestProperty("Accept", "application/json");
         connection.setRequestProperty("Content-Type", "application/json; charset=utf-8");
         if (authenticated) connection.setRequestProperty("Authorization", "Bearer " + prefs.getString("cloud_token", ""));
@@ -153,6 +179,6 @@ public final class CloudProfileClient {
     private static String shortError(Exception e) {
         String message = e.getMessage();
         if (message == null || message.trim().isEmpty()) return "Cloud connection failed";
-        return message.length() > 90 ? message.substring(0, 90) : message;
+        return message.length() > 100 ? message.substring(0, 100) : message;
     }
 }
