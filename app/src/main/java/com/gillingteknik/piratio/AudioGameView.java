@@ -7,14 +7,13 @@ import android.view.MotionEvent;
 import java.lang.reflect.Field;
 
 /**
- * Thin prototype bridge around GameView. It watches the local player's fire cooldown
- * so cannon SFX are emitted for this device's player only, never for bots/remotes.
+ * Thin bridge around GameView. It watches only the local player's fire cooldown and
+ * emits one cannon SFX when that cooldown jumps from ready to reloading.
  */
 public class AudioGameView extends GameView {
     private Field playerField;
     private Field cooldownField;
     private Field aliveField;
-    private Field fireHeldField;
 
     public AudioGameView(Context context) {
         super(context);
@@ -25,8 +24,6 @@ public class AudioGameView extends GameView {
         try {
             playerField = GameView.class.getDeclaredField("player");
             playerField.setAccessible(true);
-            fireHeldField = GameView.class.getDeclaredField("fireHeld");
-            fireHeldField.setAccessible(true);
             Object player = playerField.get(this);
             if (player != null) {
                 cooldownField = player.getClass().getDeclaredField("fireCooldown");
@@ -66,16 +63,10 @@ public class AudioGameView extends GameView {
         }
     }
 
-    private boolean fireHeld() {
-        try {
-            return fireHeldField != null && fireHeldField.getBoolean(this);
-        } catch (Exception ignored) {
-            return false;
-        }
-    }
-
-    private void maybePlayShot(float before, float after) {
-        if (localPlayerAlive() && fireHeld() && after > 0.10f && after > before + 0.10f) {
+    private void maybePlayShot(float before, float after, boolean aliveBefore, boolean aliveAfter) {
+        // A real shot changes fireCooldown from ready/near-ready to the ship's reload time.
+        // Requiring the player to be alive on both sides avoids a false sound on respawn.
+        if (aliveBefore && aliveAfter && before >= 0f && after > 0.15f && after > before + 0.10f) {
             AudioController.get(getContext()).playCannon();
         }
     }
@@ -83,17 +74,21 @@ public class AudioGameView extends GameView {
     @Override
     public boolean onTouchEvent(MotionEvent event) {
         float before = cooldown();
+        boolean aliveBefore = localPlayerAlive();
         boolean result = super.onTouchEvent(event);
         float after = cooldown();
-        maybePlayShot(before, after);
+        boolean aliveAfter = localPlayerAlive();
+        maybePlayShot(before, after, aliveBefore, aliveAfter);
         return result;
     }
 
     @Override
     protected void onDraw(Canvas canvas) {
         float before = cooldown();
+        boolean aliveBefore = localPlayerAlive();
         super.onDraw(canvas);
         float after = cooldown();
-        maybePlayShot(before, after);
+        boolean aliveAfter = localPlayerAlive();
+        maybePlayShot(before, after, aliveBefore, aliveAfter);
     }
 }
