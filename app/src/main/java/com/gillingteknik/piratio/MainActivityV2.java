@@ -43,6 +43,7 @@ public class MainActivityV2 extends Activity {
     private AudioController audio;
     private CloudProfileClient cloud;
     private PlayGamesAccountManager playGames;
+    private GooglePlayBilling billing;
     private boolean gameRunning;
     private String accountState = "LOCAL PRACTICE";
     private boolean accountConnected;
@@ -59,10 +60,17 @@ public class MainActivityV2 extends Activity {
 
         audio = AudioController.get(this);
         cloud = new CloudProfileClient(this);
+        billing = new GooglePlayBilling(this, cloud, (message, profileChanged) -> {
+            if (profileChanged) refreshProfileUi();
+            if (message != null && !message.isEmpty() && !message.equals("Google Play store ready")) {
+                Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
+            }
+        });
         playGames = new PlayGamesAccountManager(this, cloud, (state, connected) -> {
             accountState = state;
             accountConnected = connected;
             refreshProfileUi();
+            if (connected && billing != null) billing.refreshPurchases();
         });
 
         showMainMenu();
@@ -222,7 +230,7 @@ public class MainActivityV2 extends Activity {
         });
         content.addView(sync, menuButtonParams());
 
-        TextView note = label("Cloud save restores the server copy of coins and owned skins. Editing local files cannot update the account wallet.\nApple Game Center uses the same authoritative backend contract on iOS.",
+        TextView note = label("Cloud save restores the server copy of coins and owned skins. Editing local files cannot update the account wallet.\nGoogle coin purchases are verified on the backend before coins are granted. Apple Game Center uses the same account backend contract on iOS.",
                 12, Color.rgb(184, 216, 224), false);
         note.setGravity(Gravity.CENTER);
         content.addView(note, top(7));
@@ -237,7 +245,7 @@ public class MainActivityV2 extends Activity {
 
         dialog.setContentView(content);
         dialog.show();
-        sizeDialog(dialog, 0.58f, 0.88f);
+        sizeDialog(dialog, 0.58f, 0.90f);
     }
 
     private void showSkinsDialog() {
@@ -293,19 +301,46 @@ public class MainActivityV2 extends Activity {
             content.addView(b, menuButtonParams());
         }
 
+        TextView coinStoreTitle = label("COIN STORE", 15, Color.rgb(245, 215, 126), true);
+        coinStoreTitle.setGravity(Gravity.CENTER);
+        content.addView(coinStoreTitle, top(10));
+
+        LinearLayout packs = new LinearLayout(this);
+        packs.setOrientation(LinearLayout.HORIZONTAL);
+        addCoinPack(packs, "1,000\nCOINS", GooglePlayBilling.COINS_1000);
+        addCoinPack(packs, "3,000\nCOINS", GooglePlayBilling.COINS_3000);
+        addCoinPack(packs, "8,000\nCOINS", GooglePlayBilling.COINS_8000);
+        content.addView(packs, top(4));
+
         TextView storeNote = label(accountConnected
-                        ? "Account purchases are checked and deducted by the server. The APK cannot submit its own balance or unlock list."
-                        : "LOCAL PRACTICE: coins/skins here are not trusted account progression. Sign in for server-backed ownership.",
+                        ? "Coin packs open Google Play. The server independently verifies the purchase token and decides the coin amount before updating your account."
+                        : "Sign in with Play Games to buy account coins. Local practice coins cannot be converted into account coins.",
                 12, Color.rgb(184, 216, 224), false);
         storeNote.setGravity(Gravity.CENTER);
-        content.addView(storeNote, top(8));
+        content.addView(storeNote, top(7));
 
         Button close = menuButton("CLOSE", Color.rgb(91, 56, 51));
         close.setOnClickListener(v -> dialog.dismiss());
         content.addView(close, menuButtonParams());
         dialog.setContentView(content);
         dialog.show();
-        sizeDialog(dialog, 0.61f, 0.92f);
+        sizeDialog(dialog, 0.65f, 0.96f);
+    }
+
+    private void addCoinPack(LinearLayout packs, String text, String productId) {
+        Button pack = menuButton(text, accountConnected ? Color.rgb(100, 70, 29) : Color.rgb(62, 66, 69));
+        pack.setTextSize(13);
+        pack.setEnabled(accountConnected);
+        pack.setOnClickListener(v -> {
+            if (!accountConnected || !cloud.hasSession()) {
+                Toast.makeText(this, "Sign in with Play Games first", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            billing.buy(productId);
+        });
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(60), 1f);
+        p.setMargins(dp(4), dp(3), dp(4), dp(3));
+        packs.addView(pack, p);
     }
 
     private void showCreatePartyDialog() {
@@ -407,10 +442,12 @@ public class MainActivityV2 extends Activity {
     protected void onResume() {
         super.onResume();
         if (audio != null) audio.onResume();
+        if (billing != null && accountConnected) billing.refreshPurchases();
     }
 
     @Override
     protected void onDestroy() {
+        if (billing != null) billing.close();
         if (isFinishing() && audio != null) audio.release();
         super.onDestroy();
     }
