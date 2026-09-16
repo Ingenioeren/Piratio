@@ -2,6 +2,7 @@ package com.gillingteknik.piratio;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.content.res.AssetFileDescriptor;
 import android.media.AudioAttributes;
 import android.media.MediaPlayer;
 import android.media.SoundPool;
@@ -12,6 +13,15 @@ import java.util.List;
 import java.util.Random;
 
 public final class AudioController {
+    private static final String INTRO_ASSET = "music/piratio_intro.ogg";
+    private static final String[] SHANTY_ASSETS = {
+            "music/piratio_sea_shanty_1.ogg",
+            "music/piratio_sea_shanty_2.ogg",
+            "music/piratio_sea_shanty_3.ogg",
+            "music/piratio_sea_shanty_4.ogg",
+            "music/piratio_sea_shanty_5.ogg"
+    };
+
     private static AudioController instance;
 
     public static synchronized AudioController get(Context context) {
@@ -31,10 +41,22 @@ public final class AudioController {
     private MediaPlayer musicPlayer;
     private Mode mode = Mode.NONE;
     private int lastTrack = -1;
-    private int currentResourceTag = -1;
+    private String currentTrackKey = "";
     private boolean pausedByLifecycle;
 
     private enum Mode { NONE, MENU, GAME }
+
+    private static final class Track {
+        final String assetPath;
+        final int resourceId;
+        final String key;
+
+        Track(String assetPath, int resourceId, String key) {
+            this.assetPath = assetPath;
+            this.resourceId = resourceId;
+            this.key = key;
+        }
+    }
 
     private AudioController(Context context) {
         this.context = context;
@@ -78,6 +100,14 @@ public final class AudioController {
         return result;
     }
 
+    private boolean hasAsset(String path) {
+        try (AssetFileDescriptor ignored = context.getAssets().openFd(path)) {
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
     private int cannonSoundIdSafe() {
         return cannonSoundId;
     }
@@ -91,18 +121,16 @@ public final class AudioController {
     }
 
     public boolean hasSoundtrackAssets() {
-        return introResource != 0 || shanties.length > 0;
+        if (hasAsset(INTRO_ASSET) || introResource != 0) return true;
+        for (String asset : SHANTY_ASSETS) if (hasAsset(asset)) return true;
+        return shanties.length > 0;
     }
 
     public void setMusicEnabled(boolean enabled) {
         prefs.edit().putBoolean("music_enabled", enabled).apply();
-        if (!enabled) {
-            stopMusic();
-        } else if (mode == Mode.MENU) {
-            playMenu();
-        } else if (mode == Mode.GAME) {
-            playGame();
-        }
+        if (!enabled) stopMusic();
+        else if (mode == Mode.MENU) playMenu();
+        else if (mode == Mode.GAME) playGame();
     }
 
     public void setSfxEnabled(boolean enabled) {
@@ -111,44 +139,83 @@ public final class AudioController {
 
     public void playMenu() {
         mode = Mode.MENU;
-        if (!isMusicEnabled() || introResource == 0) {
+        if (!isMusicEnabled()) {
             stopMusicOnly();
             return;
         }
-        if (musicPlayer != null && musicPlayer.isPlaying() && currentResourceTag == introResource) return;
-        startTrack(introResource, true, false);
+
+        Track intro = hasAsset(INTRO_ASSET)
+                ? new Track(INTRO_ASSET, 0, "asset:intro")
+                : introResource != 0 ? new Track(null, introResource, "raw:intro") : null;
+        if (intro == null) {
+            stopMusicOnly();
+            return;
+        }
+        if (musicPlayer != null && musicPlayer.isPlaying() && currentTrackKey.equals(intro.key)) return;
+        startTrack(intro, true, false);
     }
 
     public void playGame() {
         mode = Mode.GAME;
-        if (!isMusicEnabled() || shanties.length == 0) {
+        if (!isMusicEnabled()) {
             stopMusicOnly();
             return;
         }
-        if (musicPlayer != null && musicPlayer.isPlaying() && currentResourceTag != introResource) return;
+        if (musicPlayer != null && musicPlayer.isPlaying() && currentTrackKey.startsWith("game:")) return;
         playNextShanty();
     }
 
+    private List<Track> gameTracks() {
+        ArrayList<Track> tracks = new ArrayList<>();
+        for (int i = 0; i < SHANTY_ASSETS.length; i++) {
+            if (hasAsset(SHANTY_ASSETS[i])) {
+                tracks.add(new Track(SHANTY_ASSETS[i], 0, "game:asset:" + i));
+            }
+        }
+        if (!tracks.isEmpty()) return tracks;
+        for (int i = 0; i < shanties.length; i++) {
+            tracks.add(new Track(null, shanties[i], "game:raw:" + i));
+        }
+        return tracks;
+    }
+
     private void playNextShanty() {
-        if (mode != Mode.GAME || !isMusicEnabled() || shanties.length == 0) return;
+        if (mode != Mode.GAME || !isMusicEnabled()) return;
+        List<Track> tracks = gameTracks();
+        if (tracks.isEmpty()) {
+            stopMusicOnly();
+            return;
+        }
 
         List<Integer> candidates = new ArrayList<>();
-        for (int i = 0; i < shanties.length; i++) {
-            if (i != lastTrack || shanties.length == 1) candidates.add(i);
+        for (int i = 0; i < tracks.size(); i++) {
+            if (i != lastTrack || tracks.size() == 1) candidates.add(i);
         }
         if (candidates.isEmpty()) candidates.add(0);
         Collections.shuffle(candidates, random);
         int index = candidates.get(0);
         lastTrack = index;
-        startTrack(shanties[index], false, true);
+        startTrack(tracks.get(index), false, true);
     }
 
-    private void startTrack(int resourceId, boolean looping, boolean advanceOnComplete) {
+    private void startTrack(Track track, boolean looping, boolean advanceOnComplete) {
         stopMusicOnly();
-        if (!isMusicEnabled() || resourceId == 0) return;
+        if (!isMusicEnabled() || track == null) return;
         try {
-            musicPlayer = MediaPlayer.create(context, resourceId);
-            currentResourceTag = resourceId;
+            if (track.assetPath != null) {
+                AssetFileDescriptor afd = context.getAssets().openFd(track.assetPath);
+                musicPlayer = new MediaPlayer();
+                musicPlayer.setDataSource(afd.getFileDescriptor(), afd.getStartOffset(), afd.getLength());
+                afd.close();
+                musicPlayer.setAudioAttributes(new AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_GAME)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build());
+                musicPlayer.prepare();
+            } else {
+                musicPlayer = MediaPlayer.create(context, track.resourceId);
+            }
+            currentTrackKey = track.key;
             if (musicPlayer == null) return;
             musicPlayer.setVolume(0.52f, 0.52f);
             musicPlayer.setLooping(looping);
@@ -198,7 +265,7 @@ public final class AudioController {
 
     private void stopMusicOnly() {
         releasePlayer();
-        currentResourceTag = -1;
+        currentTrackKey = "";
     }
 
     private void releasePlayer() {
