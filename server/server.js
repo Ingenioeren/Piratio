@@ -2,6 +2,7 @@ const http = require('http');
 const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 const { Pool } = require('pg');
+const googlePlay = require('./googlePlaySecurity');
 
 const PORT = Number(process.env.PORT || 8080);
 const HUMAN_CAP = 20;
@@ -139,6 +140,12 @@ function publicProfile(profile) {
 
 function ownsSkin(profile, skin) {
   return skin >= 0 && skin < 16 && (profile.skins & (1 << skin)) !== 0;
+}
+
+async function ledgerHasKey(idempotencyKey) {
+  if (!pool) return memoryLedger.some((entry) => entry.idempotencyKey === idempotencyKey);
+  const result = await pool.query('SELECT 1 FROM piratio_wallet_ledger WHERE idempotency_key=$1', [idempotencyKey]);
+  return result.rowCount > 0;
 }
 
 /**
@@ -386,9 +393,11 @@ const server = http.createServer(async (req, res) => {
         botsPerOcean: PERSISTENT_BOTS,
         database: pool ? 'postgres' : 'memory-dev',
         googleAuthConfigured: Boolean(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET),
+        googleServerCredentialsConfigured: googlePlay.configured(),
         appleAuthConfigured: Boolean(APPLE_BUNDLE_ID),
         durableSessionSecret: Boolean(process.env.SESSION_SECRET),
         economyAuthority: 'server',
+        purchaseVerification: 'google-play-server',
         gameplayAuthority: 'server-required-for-ranked-rewards',
       });
       return;
@@ -397,10 +406,13 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && req.url === '/api/auth/google') {
       rateLimit(req, 'auth', 12, 60_000);
       const body = await readJson(req);
-      const platformId = await verifyGoogle(body.serverAuthCode);
+      const serverAuthCode = String(body.serverAuthCode || '');
+      if (!serverAuthCode) throw httpError(400, 'GOOGLE_AUTH_CODE_REQUIRED');
+      await googlePlay.verifyIntegrity(body.integrityToken, `auth-google:${serverAuthCode}`);
+      const platformId = await verifyGoogle(serverAuthCode);
       const id = accountId('google_play', platformId);
       const profile = await loadProfile(id, 'google_play');
-      json(res, 200, { token: issueSession(id, 'google_play'), profile: publicProfile(profile) });
+      json(res, 200, { accountId: id, token: issueSession(id, 'google_play'), profile: publicProfile(profile) });
       return;
     }
 
@@ -410,7 +422,7 @@ const server = http.createServer(async (req, res) => {
       const platformId = await verifyApple(body);
       const id = accountId('apple_game_center', platformId);
       const profile = await loadProfile(id, 'apple_game_center');
-      json(res, 200, { token: issueSession(id, 'apple_game_center'), profile: publicProfile(profile) });
+      json(res, 200, { accountId: id, token: issueSession(id, 'apple_game_center'), profile: publicProfile(profile) });
       return;
     }
 
@@ -443,6 +455,38 @@ const server = http.createServer(async (req, res) => {
       rejectAuthoritativeFields(body);
       const profile = await buyOrEquipSkin(session, body.skin);
       json(res, 200, { profile: publicProfile(profile) });
+      return;
+    }
+
+    if (req.method === 'POST' && req.url === '/api/shop/google-purchase') {
+      rateLimit(req, 'purchase', 30, 60_000);
+      const session = readSession(req);
+      if (!session) throw httpError(401, 'UNAUTHORIZED');
+      if (session.provider !== 'google_play') throw httpError(400, 'GOOGLE_PURCHASE_REQUIRES_GOOGLE_ACCOUNT');
+      const body = await readJson(req);
+      rejectAuthoritativeFields(body);
+      const productId = String(body.productId || '');
+      const purchaseToken = String(body.purchaseToken || '');
+      const idempotencyKey = googlePlay.purchaseLedgerKey(purchaseToken);
+      const alreadyGranted = await ledgerHasKey(idempotencyKey);
+      const verified = await googlePlay.verifyCoinPurchase(session.sub, productId, purchaseToken);
+
+      if (verified.consumed) {
+        if (!alreadyGranted) throw httpError(409, 'GOOGLE_PURCHASE_ALREADY_CONSUMED');
+        const profile = await loadProfile(session.sub, session.provider);
+        json(res, 200, { profile: publicProfile(profile), duplicate: true });
+        return;
+      }
+
+      const profile = await serverGrantCoins(
+        session.sub,
+        session.provider,
+        verified.coins,
+        `google:${verified.productId}`,
+        idempotencyKey
+      );
+      await googlePlay.consumeCoinPurchase(verified.productId, purchaseToken);
+      json(res, 200, { profile: publicProfile(profile), duplicate: alreadyGranted });
       return;
     }
 
