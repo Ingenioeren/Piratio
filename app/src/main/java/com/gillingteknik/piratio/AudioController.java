@@ -24,25 +24,31 @@ public final class AudioController {
     private final Random random = new Random();
     private final SoundPool soundPool;
     private final int cannonSoundId;
+    private final int introResource;
+    private final int[] shanties;
+
     private boolean cannonLoaded;
     private MediaPlayer musicPlayer;
     private Mode mode = Mode.NONE;
     private int lastTrack = -1;
+    private int currentResourceTag = -1;
     private boolean pausedByLifecycle;
-
-    private final int[] shanties = {
-            R.raw.piratio_sea_shanty_1,
-            R.raw.piratio_sea_shanty_2,
-            R.raw.piratio_sea_shanty_3,
-            R.raw.piratio_sea_shanty_4,
-            R.raw.piratio_sea_shanty_5
-    };
 
     private enum Mode { NONE, MENU, GAME }
 
     private AudioController(Context context) {
         this.context = context;
         this.prefs = context.getSharedPreferences("piratio_profile", Context.MODE_PRIVATE);
+
+        introResource = rawId("piratio_intro");
+        shanties = existingRawIds(
+                "piratio_sea_shanty_1",
+                "piratio_sea_shanty_2",
+                "piratio_sea_shanty_3",
+                "piratio_sea_shanty_4",
+                "piratio_sea_shanty_5"
+        );
+
         AudioAttributes attributes = new AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_GAME)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
@@ -57,6 +63,21 @@ public final class AudioController {
         cannonSoundId = soundPool.load(context, R.raw.cannon_shot, 1);
     }
 
+    private int rawId(String name) {
+        return context.getResources().getIdentifier(name, "raw", context.getPackageName());
+    }
+
+    private int[] existingRawIds(String... names) {
+        ArrayList<Integer> ids = new ArrayList<>();
+        for (String name : names) {
+            int id = rawId(name);
+            if (id != 0) ids.add(id);
+        }
+        int[] result = new int[ids.size()];
+        for (int i = 0; i < ids.size(); i++) result[i] = ids.get(i);
+        return result;
+    }
+
     private int cannonSoundIdSafe() {
         return cannonSoundId;
     }
@@ -67,6 +88,10 @@ public final class AudioController {
 
     public boolean isSfxEnabled() {
         return prefs.getBoolean("sfx_enabled", true);
+    }
+
+    public boolean hasSoundtrackAssets() {
+        return introResource != 0 || shanties.length > 0;
     }
 
     public void setMusicEnabled(boolean enabled) {
@@ -86,30 +111,31 @@ public final class AudioController {
 
     public void playMenu() {
         mode = Mode.MENU;
-        if (!isMusicEnabled()) {
+        if (!isMusicEnabled() || introResource == 0) {
             stopMusicOnly();
             return;
         }
-        if (musicPlayer != null && musicPlayer.isPlaying() && currentResourceTag == R.raw.piratio_intro) return;
-        startTrack(R.raw.piratio_intro, true, false);
+        if (musicPlayer != null && musicPlayer.isPlaying() && currentResourceTag == introResource) return;
+        startTrack(introResource, true, false);
     }
 
     public void playGame() {
         mode = Mode.GAME;
-        if (!isMusicEnabled()) {
+        if (!isMusicEnabled() || shanties.length == 0) {
             stopMusicOnly();
             return;
         }
-        if (musicPlayer != null && musicPlayer.isPlaying() && currentResourceTag != R.raw.piratio_intro) return;
+        if (musicPlayer != null && musicPlayer.isPlaying() && currentResourceTag != introResource) return;
         playNextShanty();
     }
 
-    private int currentResourceTag = -1;
-
     private void playNextShanty() {
-        if (mode != Mode.GAME || !isMusicEnabled()) return;
+        if (mode != Mode.GAME || !isMusicEnabled() || shanties.length == 0) return;
+
         List<Integer> candidates = new ArrayList<>();
-        for (int i = 0; i < shanties.length; i++) if (i != lastTrack) candidates.add(i);
+        for (int i = 0; i < shanties.length; i++) {
+            if (i != lastTrack || shanties.length == 1) candidates.add(i);
+        }
         if (candidates.isEmpty()) candidates.add(0);
         Collections.shuffle(candidates, random);
         int index = candidates.get(0);
@@ -119,7 +145,7 @@ public final class AudioController {
 
     private void startTrack(int resourceId, boolean looping, boolean advanceOnComplete) {
         stopMusicOnly();
-        if (!isMusicEnabled()) return;
+        if (!isMusicEnabled() || resourceId == 0) return;
         try {
             musicPlayer = MediaPlayer.create(context, resourceId);
             currentResourceTag = resourceId;
